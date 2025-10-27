@@ -46,7 +46,6 @@ func (pooler *Pooler) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	bridge.ProcessMessagesFromClient(ctx)
-
 }
 
 type Pooler struct {
@@ -63,7 +62,6 @@ func New(ctx context.Context, conn services.PubSubProvider) *Pooler {
 
 func (pooler *Pooler) Start() {
 	http.HandleFunc("/ws", pooler.handleWebSocket)
-	http.Handle("/", http.FileServer(http.Dir("/home/yashwan/pers/ottam/static")))
 
 	fmt.Println("Server started at http://localhost:8080")
 	err := http.ListenAndServe(":8080", nil)

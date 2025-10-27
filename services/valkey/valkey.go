@@ -3,7 +3,6 @@ package valkey
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/kychandar/ottam/services"
 	"github.com/valkey-io/valkey-go"
@@ -24,12 +23,10 @@ func New(addr string) (services.PubSubProvider, error) {
 }
 
 func (conn *ValKeyConnection) Publish(ctx context.Context, subject string, data []byte) error {
-	start := time.Now()
 	err := conn.client.Do(ctx, conn.client.B().Publish().Channel(subject).Message(string(data)).Build()).Error()
 	if err != nil {
 		return err
 	}
-	fmt.Println("completed in", time.Since(start))
 	return nil
 }
 

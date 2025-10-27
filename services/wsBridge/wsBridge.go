@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"sync"
 
 	"github.com/gammazero/deque"
@@ -59,10 +58,9 @@ func (w *wsBridge) ProcessMessagesFromClient(ctx context.Context) {
 		// mt, message, err := conn.ReadMessage()
 		_, message, err := w.conn.ReadMessage()
 		if err != nil {
-			log.Println("Read error:", err)
-			break
+			fmt.Println("Read error:", err)
+			continue
 		}
-		log.Printf("Received: %s\n", message)
 
 		clientMessage := &ClientMessage{}
 		err = json.Unmarshal(message, clientMessage)

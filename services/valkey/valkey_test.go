@@ -3,15 +3,20 @@ package valkey
 import (
 	"context"
 	"fmt"
+	"os"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 )
 
-const addr = "100.130.101.125:30079"
-
 func TestPubSub(t *testing.T) {
+	addr, exist := os.LookupEnv("VALKEY_ADDR")
+	if !exist {
+		t.Error("VALKEY_ADDR required")
+		t.FailNow()
+	}
+
 	conn, _ := New(addr)
 	wait := make(chan struct{})
 

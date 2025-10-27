@@ -1,19 +1,19 @@
-package wspooler
+package main
 
 import (
 	"context"
+	"fmt"
 	"os"
-	"testing"
 	"time"
 
 	"github.com/kychandar/ottam/services/valkey"
+	wspooler "github.com/kychandar/ottam/services/wsPooler"
 )
 
-func TestWSPooler(t *testing.T) {
+func main() {
 	addr, exist := os.LookupEnv("VALKEY_ADDR")
 	if !exist {
-		t.Error("VALKEY_ADDR required")
-		t.FailNow()
+		panic("VALKEY_ADDR required")
 	}
 
 	conn, _ := valkey.New(addr)
@@ -22,10 +22,10 @@ func TestWSPooler(t *testing.T) {
 		for {
 			select {
 			case <-ticker.C:
-				conn.Publish(context.TODO(), "t1", []byte(time.Now().String()))
+				conn.Publish(context.TODO(), "t1", []byte(fmt.Sprintf("%v", time.Now().UnixNano())))
 			}
 		}
 	}()
-	pooler := New(context.TODO(), conn)
+	pooler := wspooler.New(context.TODO(), conn)
 	pooler.Start()
 }
