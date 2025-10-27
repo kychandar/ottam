@@ -2,6 +2,7 @@ package valkey
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -10,15 +11,20 @@ import (
 
 const addr = "100.130.101.125:30079"
 
-func TestPublish(t *testing.T) {
-	conn := New(addr)
-	err := conn.Publish(context.TODO(), "t1", []byte(time.Now().String()))
+func TestPubSub(t *testing.T) {
+	conn, _ := New(addr)
+	wait := make(chan struct{})
 
+	const (
+		subj = "t1"
+	)
+	msg := time.Now().String()
+	_, err := conn.Subscribe(context.TODO(), subj, func(ctx context.Context, subject string, data []byte) {
+		assert.Equal(t, fmt.Sprintf("%s:%s", subj, msg), string(data))
+		wait <- struct{}{}
+	})
 	assert.Nil(t, err)
-}
-
-func TestSubscribe(t *testing.T) {
-	conn := New(addr)
-	err := conn.Subscribe(context.TODO(), "t1", []byte(time.Now().String()))
+	err = conn.Publish(context.TODO(), subj, []byte(msg))
 	assert.Nil(t, err)
+	<-wait
 }

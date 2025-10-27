@@ -1,8 +1,8 @@
 package wspooler
 
 import (
+	"context"
 	"testing"
-	"time"
 
 	"github.com/kychandar/ottam/services/valkey"
 )
@@ -10,9 +10,8 @@ import (
 const addr = "100.130.101.125:30079"
 
 func TestWSPooler(t *testing.T) {
-	conn := valkey.New(addr)
-	pooler := New(conn)
+	conn, _ := valkey.New(addr)
+	pooler := New(context.TODO(), conn)
 	pooler.Start()
 
-	time.Sleep(100 * time.Second)
 }

@@ -5,11 +5,12 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"sync"
-	"time"
 
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
-	"github.com/kychandar/ottam/services/valkey"
+	"github.com/kychandar/ottam/services"
+	centralisedsubscriber "github.com/kychandar/ottam/services/centralisedSubscriber"
+	wsbridge "github.com/kychandar/ottam/services/wsBridge"
 )
 
 // Define an upgrader to upgrade HTTP connections to WebSocket
@@ -21,6 +22,8 @@ var upgrader = websocket.Upgrader{
 
 func (pooler *Pooler) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	// Upgrade HTTP to WebSocket
+	log.Println("Client initiated!")
+
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Println("Upgrade error:", err)
@@ -30,61 +33,41 @@ func (pooler *Pooler) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	log.Println("Client connected!")
 
-	// lock := &sync.Mutex{}
-	for {
-		// Read message from client
-		// mt, message, err := conn.ReadMessage()
-		_, message, err := conn.ReadMessage()
-		if err != nil {
-			log.Println("Read error:", err)
-			break
-		}
-		log.Printf("Received: %s\n", message)
-
-		// asyncWriter(conn, lock)
-
-		go func() {
-			pooler.conn.Publish(context.TODO(), "t1", message)
-		}()
-
-		// Echo the message back
-		// lock.Lock()
-		// response := fmt.Sprintf("Server echo : recieved message : %s", message)
-		// if err := conn.WriteMessage(mt, []byte(response)); err != nil {
-		// 	log.Println("Write error:", err)
-		// 	break
-		// }
-		// lock.Unlock()
-
+	wsConnID := uuid.New().String()
+	bridge, err := wsbridge.New(wsConnID, conn, pooler.centSubscriber)
+	if err != nil {
+		log.Println("Upgrade error:", err)
+		return
 	}
-}
 
-func asyncWriter(conn *websocket.Conn, lock *sync.Mutex) {
-	for range time.NewTicker(2 * time.Second).C {
-		lock.Lock()
-		fmt.Println("initiating msg send...")
-		err := conn.WriteMessage(websocket.TextMessage, []byte("ping"))
-		if err != nil {
-			log.Println("Write error:", err)
-			// break
-		} else {
-			fmt.Println("successfully msg send...")
-		}
-		lock.Unlock()
-	}
+	ctx := r.Context()
+	go func() {
+		bridge.ProcessMessagesFromServer(ctx)
+	}()
+
+	bridge.ProcessMessagesFromClient(ctx)
 
 }
 
 type Pooler struct {
-	conn *valkey.ValKeyConnection
+	conn           services.PubSubProvider
+	centSubscriber services.CentralisedSubscriber
 }
 
-func New(conn *valkey.ValKeyConnection) *Pooler {
-	return &Pooler{conn: conn}
+func New(ctx context.Context, conn services.PubSubProvider) *Pooler {
+	return &Pooler{
+		conn:           conn,
+		centSubscriber: centralisedsubscriber.New(ctx, conn),
+	}
 }
 
 func (pooler *Pooler) Start() {
 	http.HandleFunc("/ws", pooler.handleWebSocket)
+	http.Handle("/", http.FileServer(http.Dir("/home/yashwan/pers/ottam/static")))
+
 	fmt.Println("Server started at http://localhost:8080")
-	log.Fatal(http.ListenAndServe(":8080", nil))
+	err := http.ListenAndServe(":8080", nil)
+	if err != nil {
+		panic(err)
+	}
 }

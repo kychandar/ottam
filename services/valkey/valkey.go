@@ -5,23 +5,22 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/kychandar/ottam/services"
 	"github.com/valkey-io/valkey-go"
 )
 
 type ValKeyConnection struct {
-	// addr:=[]string{"100.130.101.125:30079"}
-	// addr   []string
 	client valkey.Client
 }
 
-func New(addr string) *ValKeyConnection {
+func New(addr string) (services.PubSubProvider, error) {
 	client, err := valkey.NewClient(valkey.ClientOption{InitAddress: []string{addr}})
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 	return &ValKeyConnection{
 		client: client,
-	}
+	}, nil
 }
 
 func (conn *ValKeyConnection) Publish(ctx context.Context, subject string, data []byte) error {
@@ -34,26 +33,22 @@ func (conn *ValKeyConnection) Publish(ctx context.Context, subject string, data 
 	return nil
 }
 
-func (conn *ValKeyConnection) Subscribe(ctx context.Context, subject string, data []byte) error {
+func (conn *ValKeyConnection) Subscribe(ctx context.Context, subject string, callBack services.SubscriptionCallBack) (func() error, error) {
+	cmd := conn.client.B().Subscribe().Channel(subject).Build().Pin()
+	err := conn.client.Do(ctx, cmd).Error()
+	if err != nil {
+		return nil, err
+	}
+
 	go func() {
-		err := conn.client.Receive(ctx, conn.client.B().Subscribe().Channel("t1").Build(), func(msg valkey.PubSubMessage) {
-			fmt.Println(msg.Channel, msg.Message)
+		err = conn.client.Receive(ctx, cmd, func(msg valkey.PubSubMessage) {
+			callBack(ctx, subject, []byte(fmt.Sprintf("%s:%s", msg.Channel, msg.Message)))
 		})
 		if err != nil {
 			panic(err)
 		}
-
-		fmt.Println("subscription closed")
 	}()
-
-	time.Sleep(5 * time.Second)
-
-	err := conn.client.Do(ctx, conn.client.B().Unsubscribe().Channel("t1").Build()).Error()
-	if err != nil {
-		return nil
-	}
-
-	time.Sleep(1 * time.Second)
-
-	return nil
+	return func() error {
+		return conn.client.Do(ctx, conn.client.B().Unsubscribe().Channel(subject).Build()).Error()
+	}, nil
 }
