@@ -1,16 +1,25 @@
 import ws from 'k6/ws';
+import { fail } from 'k6';
 import { Trend } from 'k6/metrics';
 import { check, sleep } from 'k6';
 
 const wsLatency = new Trend('ws_message_latency', true);
 
 export const options = {
-  vus: 100,       // number of virtual users
+  vus: 1,       // number of virtual users
   duration: '10s' // test duration
 };
 
+
+const targetAddr = __ENV.TARGET_ADDR;
+if (!targetAddr) {
+  fail('Environment variable TARGET_ADDR is not set!');
+}
+
+
 export default function () {
-  const url = 'ws://localhost:8080/ws';
+  // const url = 'ws://localhost:8080/ws';
+  const url = '${targetAddr}/ws';
 
   const res = ws.connect(url, null, function (socket) {
     socket.on('open', function open() {

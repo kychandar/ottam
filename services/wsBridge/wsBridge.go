@@ -32,21 +32,27 @@ func New(wsConnID string, conn *websocket.Conn, centSubscriber services.Centrali
 
 // ProcessMessagesFromServer implements services.WSPubSubBridge.
 func (w *wsBridge) ProcessMessagesFromServer(ctx context.Context) {
+	writeBuffer := make([][]byte, 0, 10)
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-w.st:
-			for w.publishBuffer.Len() > 0 {
-				cur := w.publishBuffer.Front()
-				err := w.conn.WriteMessage(websocket.BinaryMessage, cur)
-				if err == nil {
-					w.mu.Lock()
+			if w.publishBuffer.Len() > 0 {
+				w.mu.Lock()
+				for i := 0; i < 10 && w.publishBuffer.Len() > 0; i++ {
+					writeBuffer = append(writeBuffer, w.publishBuffer.Front())
 					w.publishBuffer.PopFront()
-					w.mu.Unlock()
-				} else {
-					fmt.Println("error in writing ws msg", err)
 				}
+				w.mu.Unlock()
+
+				for _, msg := range writeBuffer {
+					err := w.conn.WriteMessage(websocket.BinaryMessage, msg)
+					if err != nil {
+						fmt.Println("error in writing ws msg:", err)
+					}
+				}
+				writeBuffer = writeBuffer[:0]
 			}
 		}
 	}

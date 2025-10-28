@@ -4,7 +4,11 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"runtime"
 	"time"
+
+	"net/http"
+	_ "net/http/pprof"
 
 	"github.com/kychandar/ottam/services/valkey"
 	wspooler "github.com/kychandar/ottam/services/wsPooler"
@@ -15,6 +19,11 @@ func main() {
 	if !exist {
 		panic("VALKEY_ADDR required")
 	}
+
+	go func() {
+		// pprof listens on :6060 by default
+		http.ListenAndServe("localhost:6060", nil)
+	}()
 
 	conn, _ := valkey.New(addr)
 	go func() {
@@ -28,4 +37,8 @@ func main() {
 	}()
 	pooler := wspooler.New(context.TODO(), conn)
 	pooler.Start()
+}
+
+func init() {
+	runtime.SetMutexProfileFraction(1)
 }
