@@ -16,6 +16,9 @@ type Config struct {
 		Provider string
 		URL      string
 	}
+	RedisProtoCache struct {
+		Addr []string
+	}
 	// Metrics struct {
 	// 	Enabled bool
 	// 	Port    int
