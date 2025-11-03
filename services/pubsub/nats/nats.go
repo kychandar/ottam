@@ -92,7 +92,7 @@ func (n *NatsPubSub) Publish(subjectName string, data []byte) error {
 	return nil
 }
 
-func (n *NatsPubSub) Subscribe(consumerName string, subjectName string, callBack func(msg []byte)) error {
+func (n *NatsPubSub) Subscribe(consumerName string, subjectName string, callBack func(msg []byte) bool) error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
@@ -101,8 +101,11 @@ func (n *NatsPubSub) Subscribe(consumerName string, subjectName string, callBack
 	}
 
 	sub, err := n.js.Subscribe(subjectName, func(m *nats.Msg) {
-		callBack(m.Data)
-		m.Ack()
+		if callBack(m.Data) {
+			m.Ack()
+		} else {
+			m.Nak()
+		}
 	}, nats.Durable(consumerName), nats.AckExplicit())
 	if err != nil {
 		return fmt.Errorf("subscribe: %w", err)

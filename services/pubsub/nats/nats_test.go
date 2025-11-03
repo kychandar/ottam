@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/kychandar/ottam/services"
 	"github.com/nats-io/nats-server/v2/server"
 )
 
@@ -30,7 +31,7 @@ func runEmbeddedNATSServer(t *testing.T) *server.Server {
 	return s
 }
 
-func TestCreateStream_NewAndExisting(t *testing.T) {
+func NewMockPubSubProvider(t *testing.T) services.PubSubProvider {
 	s := runEmbeddedNATSServer(t)
 	url := fmt.Sprintf("nats://%s", s.Addr().String())
 
@@ -38,6 +39,11 @@ func TestCreateStream_NewAndExisting(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create NatsPubSub: %v", err)
 	}
+	return pubsub
+}
+
+func TestCreateStream_NewAndExisting(t *testing.T) {
+	pubsub := NewMockPubSubProvider(t)
 	defer pubsub.Close()
 
 	subject := "test.subject"
@@ -74,13 +80,7 @@ func TestCreateStream_NewAndExisting(t *testing.T) {
 }
 
 func TestPublishSubscribe(t *testing.T) {
-	s := runEmbeddedNATSServer(t)
-	url := fmt.Sprintf("nats://%s", s.Addr().String())
-
-	pubsub, err := NewNatsPubSub(url)
-	if err != nil {
-		t.Fatalf("failed to create NatsPubSub: %v", err)
-	}
+	pubsub := NewMockPubSubProvider(t)
 	defer pubsub.Close()
 
 	subject := "chat.room"
@@ -93,9 +93,9 @@ func TestPublishSubscribe(t *testing.T) {
 	wg.Add(1)
 	received := make(chan []byte, 1)
 
-	err = pubsub.Subscribe("consumer1", subject, func(msg []byte) {
+	err := pubsub.Subscribe("consumer1", subject, func(msg []byte) bool {
 		received <- msg
-		wg.Done()
+		return true
 	})
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
@@ -139,7 +139,7 @@ func TestUnSubscribe(t *testing.T) {
 		t.Fatalf("CreateStream: %v", err)
 	}
 
-	if err := pubsub.Subscribe("c1", subject, func([]byte) {}); err != nil {
+	if err := pubsub.Subscribe("c1", subject, func([]byte) bool { return true }); err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
 
