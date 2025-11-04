@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 )
 
 var (
@@ -25,4 +26,26 @@ func Execute() {
 
 func init() {
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default: config/config.yaml)")
+	cobra.OnInitialize(initConfig)
+}
+
+func initConfig() {
+	if cfgFile != "" {
+		// Use the specified config file
+		viper.SetConfigFile(cfgFile)
+	} else {
+		// Default location: $HOME/.myapp.yaml
+		home, err := os.UserHomeDir()
+		cobra.CheckErr(err)
+
+		viper.AddConfigPath(home)
+		viper.SetConfigType("yaml")
+		viper.SetConfigName(".myapp")
+	}
+
+	viper.AutomaticEnv() // read in environment variables that match
+
+	if err := viper.ReadInConfig(); err == nil {
+		fmt.Println("Using config file:", viper.ConfigFileUsed())
+	}
 }

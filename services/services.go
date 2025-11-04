@@ -31,3 +31,18 @@ type SerializableMessage interface {
 	GetChannelName() string
 	GetPublishedTime() time.Time
 }
+
+type WebSocketBridge interface {
+	ProcessMessagesFromServer(ctx context.Context)
+	ProcessMessagesFromClient(ctx context.Context)
+}
+
+type CentralisedSubscriber interface {
+	Subscribe(ctx context.Context, clientID string, channelName string) error
+	UnSubscribe(ctx context.Context, clientID string, channelName string) error
+	UnsubscribeAll(ctx context.Context, clientID string) error
+}
+
+type GetWsWriterChannel interface {
+	GetWriterChannelForClientID(clientID string) (chan<- []byte, bool)
+}

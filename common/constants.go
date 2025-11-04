@@ -1,4 +1,4 @@
-package centprocessor
+package common
 
 import "fmt"
 
@@ -22,6 +22,6 @@ func ServerSubjFormat(server string) string {
 	return fmt.Sprintf(serverSubjFormat, server)
 }
 
-const streamNamePublisher = "publisher"
+const StreamNamePublisher = "publisher"
 
-const consumerNameCentProcessor = "centProcessor"
+const ConsumerNameCentProcessor = "centProcessor"

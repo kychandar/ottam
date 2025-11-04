@@ -15,7 +15,8 @@ type ValkeySetCache struct {
 }
 
 // NewValkeySetCache returns a new instance.
-func NewValkeySetCache(config config.Config) (services.RedisProtoCache, error) {
+func NewValkeySetCache(config *config.Config) (services.RedisProtoCache, error) {
+	fmt.Println("config.RedisProtoCache.Addr", config.RedisProtoCache.Addr)
 	client, err := valkey.NewClient(valkey.ClientOption{
 		InitAddress:  config.RedisProtoCache.Addr,
 		DisableCache: true,

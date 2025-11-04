@@ -20,7 +20,10 @@ require (
 	github.com/veqryn/slog-context v0.8.0
 )
 
+require golang.org/x/exp v0.0.0-20221031165847-c99f073a8326 // indirect
+
 require (
+	github.com/alphadose/haxmap v1.4.1
 	github.com/antithesishq/antithesis-sdk-go v0.4.3-default-no-op // indirect
 	github.com/cespare/xxhash/v2 v2.1.2 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect

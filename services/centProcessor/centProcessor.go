@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"sync"
 
+	"github.com/kychandar/ottam/common"
 	"github.com/kychandar/ottam/services"
 	slogctx "github.com/veqryn/slog-context"
 )
@@ -58,7 +59,7 @@ func (c *centralProcessorImpl) Start(ctx context.Context) error {
 
 		logger.Debug("processing message")
 
-		nodes, err := c.cache.SMEMBERS(ctx, ChannelSubscCacheKeyFormat(msg.GetChannelName()))
+		nodes, err := c.cache.SMEMBERS(ctx, common.ChannelSubscCacheKeyFormat(msg.GetChannelName()))
 		if err != nil {
 			logger.Error("failed to fetch channel nodes")
 			return false
@@ -66,7 +67,7 @@ func (c *centralProcessorImpl) Start(ctx context.Context) error {
 
 		hasError := false
 		for _, node := range nodes {
-			subj := ServerSubjFormat(node)
+			subj := common.ServerSubjFormat(node)
 			if err := c.js.Publish(subj, msgBytes); err != nil {
 				logger.Error("publish failed")
 				hasError = true

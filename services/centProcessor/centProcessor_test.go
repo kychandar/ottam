@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/kychandar/ottam/common"
 	"github.com/kychandar/ottam/ds"
 	"github.com/kychandar/ottam/mocks"
 	"github.com/stretchr/testify/mock"
@@ -14,18 +15,18 @@ func TestMessageProcessor(t *testing.T) {
 	ctx := context.Background()
 	mockCache := new(mocks.MockRedisProtoCache)
 	mockCache.On("SADD", mock.Anything, "users", []string{"bob"}).Return(nil)
-	mockCache.On("SMEMBERS", mock.Anything, ChannelSubscCacheKeyFormat("t1")).Return([]string{"node1"}, nil)
-	mockCache.On("SMEMBERS", mock.Anything, ChannelSubscCacheKeyFormat("t2")).Return([]string{"node2"}, nil)
+	mockCache.On("SMEMBERS", mock.Anything, common.ChannelSubscCacheKeyFormat("t1")).Return([]string{"node1"}, nil)
+	mockCache.On("SMEMBERS", mock.Anything, common.ChannelSubscCacheKeyFormat("t2")).Return([]string{"node2"}, nil)
 	mockCache.On("Close").Return()
 
 	err := mockCache.SADD(ctx, "users", "bob")
 	require.NoError(t, err)
 
-	members, err := mockCache.SMEMBERS(ctx, ChannelSubscCacheKeyFormat("t1"))
+	members, err := mockCache.SMEMBERS(ctx, common.ChannelSubscCacheKeyFormat("t1"))
 	require.NoError(t, err)
 	require.Equal(t, []string{"node1"}, members)
 
-	members, err = mockCache.SMEMBERS(ctx, ChannelSubscCacheKeyFormat("t2"))
+	members, err = mockCache.SMEMBERS(ctx, common.ChannelSubscCacheKeyFormat("t2"))
 	require.NoError(t, err)
 	require.Equal(t, []string{"node2"}, members)
 
@@ -37,14 +38,14 @@ func TestMessageProcessor(t *testing.T) {
 	t1, err := ds.New("t1", []byte("hi"))
 	msg1, err := t1.Serialize()
 	require.NoError(t, err)
-	mockPubSub.On("Publish", ServerSubjFormat("node1"), msg1).Return(nil)
+	mockPubSub.On("Publish", common.ServerSubjFormat("node1"), msg1).Return(nil)
 	t2, err := ds.New("t2", []byte("hi"))
 	msg2, err := t2.Serialize()
 	require.NoError(t, err)
-	mockPubSub.On("Publish", ServerSubjFormat("node2"), msg2).Return(nil)
+	mockPubSub.On("Publish", common.ServerSubjFormat("node2"), msg2).Return(nil)
 
 	var capturedCallback func([]byte) bool
-	mockPubSub.On("Subscribe", consumerNameCentProcessor, streamNamePublisher, mock.AnythingOfType("func([]uint8) bool")).
+	mockPubSub.On("Subscribe", common.ConsumerNameCentProcessor, common.StreamNamePublisher, mock.AnythingOfType("func([]uint8) bool")).
 		Run(func(args mock.Arguments) {
 			capturedCallback = args.Get(2).(func([]byte) bool)
 		}).
@@ -56,9 +57,9 @@ func TestMessageProcessor(t *testing.T) {
 		context.TODO(),
 		mockPubSub,
 		mockCache,
-		streamNamePublisher,
+		common.StreamNamePublisher,
 		"publisher",
-		consumerNameCentProcessor,
+		common.ConsumerNameCentProcessor,
 		ds.NewEmpty,
 	)
 	err = centProcessor.Start(ctx)
@@ -67,10 +68,10 @@ func TestMessageProcessor(t *testing.T) {
 	require.NotNil(t, capturedCallback, "callback should be captured")
 
 	capturedCallback(msg1)
-	mockPubSub.AssertCalled(t, "Publish", ServerSubjFormat("node1"), msg1)
+	mockPubSub.AssertCalled(t, "Publish", common.ServerSubjFormat("node1"), msg1)
 
 	capturedCallback(msg2)
-	mockPubSub.AssertCalled(t, "Publish", ServerSubjFormat("node2"), msg2)
+	mockPubSub.AssertCalled(t, "Publish", common.ServerSubjFormat("node2"), msg2)
 
 	mockPubSub.AssertExpectations(t)
 

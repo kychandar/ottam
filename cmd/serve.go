@@ -3,8 +3,13 @@ package cmd
 import (
 	"fmt"
 	"log"
+	"os"
 
 	"github.com/kychandar/ottam/config"
+	"github.com/kychandar/ottam/http"
+	"github.com/kychandar/ottam/services/centralisedSubscriber"
+	valkey "github.com/kychandar/ottam/services/inMemCache/valKey"
+	websocketbridge "github.com/kychandar/ottam/services/websocketBridge"
 	"github.com/spf13/cobra"
 )
 
@@ -27,5 +32,14 @@ func init() {
 
 func startServer(cfg *config.Config) {
 	fmt.Printf("Server starting on %s:%d\n", cfg.Server.Host, cfg.Server.Port)
-	// your main app logic here
+
+	// TODO: fix below
+	cache, err := valkey.NewValkeySetCache(cfg)
+	if err != nil {
+		panic(err)
+	}
+	hostNmae, err := os.Hostname()
+	centSubs := centralisedSubscriber.New(cache, hostNmae)
+	server := http.New(centSubs, websocketbridge.NewWsBridgeFactory())
+	server.Start()
 }
