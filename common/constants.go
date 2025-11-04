@@ -25,3 +25,8 @@ func ServerSubjFormat(server string) string {
 const StreamNamePublisher = "publisher"
 
 const ConsumerNameCentProcessor = "centProcessor"
+
+type (
+	ChannelName string
+	NodeID      string
+)

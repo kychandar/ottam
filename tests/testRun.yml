@@ -1,0 +1,15 @@
+apiVersion: k6.io/v1alpha1
+kind: TestRun
+metadata:
+  name: run-k6-from-configmap
+  namespace: t1
+spec:
+  parallelism: 4
+  script:
+    configMap:
+      name: test-t1
+      file: test.js
+  runner:
+    env:
+      - name: TARGET_ADDR
+        value: 'ws://100.130.101.125:8080'

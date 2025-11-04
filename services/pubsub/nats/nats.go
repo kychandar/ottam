@@ -1,9 +1,13 @@
-package nats
+package pubSubProvider
 
 import (
 	"fmt"
+	"log"
+	"os"
 	"sort"
+	"strconv"
 	"sync"
+	"time"
 
 	"github.com/kychandar/ottam/services"
 	"github.com/nats-io/nats.go"
@@ -48,6 +52,7 @@ func (n *NatsPubSub) CreateStream(streamName string, subjects []string) error {
 			cfg := &nats.StreamConfig{
 				Name:     streamName,
 				Subjects: subjects,
+				MaxAge:   2 * time.Second,
 			}
 			if _, err := n.js.AddStream(cfg); err != nil {
 				return fmt.Errorf("create stream: %w", err)
@@ -99,14 +104,60 @@ func (n *NatsPubSub) Subscribe(consumerName string, subjectName string, callBack
 	if _, ok := n.subs[consumerName]; ok {
 		return fmt.Errorf("consumer %s already subscribed", consumerName)
 	}
+	maxWorkers := 100
+	maxWorkersString, exist := os.LookupEnv("MAX_WORKERS")
+	if exist {
+		parsed, err := strconv.Atoi(maxWorkersString)
+		if err != nil {
+			fmt.Printf("invalid MAX_WORKERS=%q, using default %d\n", maxWorkersString, maxWorkers)
+		} else {
+			maxWorkers = parsed
+		}
+	}
+	// const (
+	// 	numWorkers = 200
+	// 	bufferSize = 2000
+	// )
+
+	// type msgJob struct {
+	// 	msg *nats.Msg
+	// }
+
+	// workCh := make(chan msgJob, bufferSize)
+
+	// for i := 0; i < numWorkers; i++ {
+	// 	go func(workerID int) {
+	// 		for job := range workCh {
+	// 			if callBack(job.msg.Data) {
+	// 				if err := job.msg.Ack(); err != nil {
+	// 					log.Printf("worker %d ack error: %v", workerID, err)
+	// 				}
+	// 			} else {
+	// 				if err := job.msg.Nak(); err != nil {
+	// 					log.Printf("worker %d nak error: %v", workerID, err)
+	// 				}
+	// 			}
+	// 		}
+	// 	}(i)
+	// }
 
 	sub, err := n.js.Subscribe(subjectName, func(m *nats.Msg) {
+		// workCh <- msgJob{msg: m}
 		if callBack(m.Data) {
-			m.Ack()
+			if err := m.Ack(); err != nil {
+				log.Printf("ack error: %v", err)
+			}
 		} else {
-			m.Nak()
+			if err := m.Nak(); err != nil {
+				log.Printf("nak error: %v", err)
+			}
 		}
-	}, nats.Durable(consumerName), nats.AckExplicit())
+	},
+		nats.Durable(consumerName),
+		nats.AckExplicit(),
+		nats.MaxAckPending(maxWorkers),
+		// nats.AckWait(2*time.Minute),
+	)
 	if err != nil {
 		return fmt.Errorf("subscribe: %w", err)
 	}

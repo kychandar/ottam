@@ -1,5 +1,7 @@
 package ds
 
+import "github.com/kychandar/ottam/common"
+
 type ClientMessage struct {
 	Version uint32
 
@@ -24,5 +26,5 @@ type ControlPlaneMessage struct {
 }
 
 type SubscriptionPayload struct {
-	ChannelName string
+	ChannelName common.ChannelName
 }

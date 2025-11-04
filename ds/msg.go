@@ -5,13 +5,16 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
+	"github.com/kychandar/ottam/common"
 	"github.com/kychandar/ottam/services"
 )
 
 type Msg struct {
-	ChannelName   string    `json:"channel_name"`
-	PublishedTime time.Time `json:"published_time"`
-	Data          []byte    `json:"data"`
+	ChannelName   common.ChannelName `json:"channel_name"`
+	PublishedTime int64              `json:"published_time"`
+	Data          []byte             `json:"data"`
+	MsgID         string             `json:"msg_id"`
 }
 
 // DeserializeFrom implements services.SerializableMessage.
@@ -20,13 +23,17 @@ func (m *Msg) DeserializeFrom(b []byte) error {
 }
 
 // GetChannelName implements services.SerializableMessage.
-func (m *Msg) GetChannelName() string {
+func (m *Msg) GetChannelName() common.ChannelName {
 	return m.ChannelName
+}
+
+func (m *Msg) GetMsgID() string {
+	return m.MsgID
 }
 
 // GetPublishedTime implements services.SerializableMessage.
 func (m *Msg) GetPublishedTime() time.Time {
-	return m.PublishedTime
+	return time.Unix(0, m.PublishedTime)
 }
 
 // Serialize implements services.SerializableMessage.
@@ -34,14 +41,15 @@ func (m *Msg) Serialize() ([]byte, error) {
 	return json.Marshal(m)
 }
 
-func New(channelName string, data []byte) (services.SerializableMessage, error) {
+func New(channelName common.ChannelName, data []byte) (services.SerializableMessage, error) {
 	if len(channelName) < 1 {
 		return nil, fmt.Errorf("invalid channel name")
 	}
 	return &Msg{
 		ChannelName:   channelName,
 		Data:          data,
-		PublishedTime: time.Now(),
+		PublishedTime: time.Now().UnixNano(),
+		MsgID:         uuid.New().String(),
 	}, nil
 }
 

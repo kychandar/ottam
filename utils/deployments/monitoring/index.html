@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>WebSocket Stress Test</title>
+  <style>
+    /* #grid {
+      display: grid;
+      grid-template-columns: repeat(10, 50px);
+      grid-gap: 5px;
+    }
+    .cell {
+      width: 50px;
+      height: 50px;
+      background-color: lightgray;
+      border: 1px solid #333;
+      transition: background-color 0.3s ease;
+    } */
+     #grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(30px, 1fr));
+  grid-gap: 4px;
+  width: 100%;
+  max-width: 100vw;
+}
+.cell {
+  aspect-ratio: 1;
+  background-color: lightgray;
+  border: 1px solid #333;
+  transition: background-color 0.3s ease;
+}
+  </style>
+</head>
+<body>
+  <h1>WebSocket Stress Test</h1>
+  
+  <label>Number of clients: <input type="number" id="numClients" value="50" min="1" max="500"></label>
+  <button id="startBtn">Start</button>
+  
+  <div id="grid"></div>
+
+<script>
+const grid = document.getElementById("grid");
+const startBtn = document.getElementById("startBtn");
+
+// Simple function to map message values to colors
+function colorFromMessage(msg) {
+    if (!msg) return "lightgray";
+    // Expecting something like: { "Status": "ok" } or { "Color": "red" }
+    if (msg.Color) return msg.Color;
+
+    if (msg.Status) {
+        switch (msg.Status) {
+            case "ok": return "limegreen";
+            case "warn": return "gold";
+            case "error": return "crimson";
+        }
+    }
+
+    if (typeof msg.Value === "number") {
+        // Map numeric value 0–100 to red–green
+        const r = Math.max(0, Math.min(255, 255 - msg.Value * 2.5));
+        const g = Math.max(0, Math.min(255, msg.Value * 2.5));
+        return `rgb(${r},${g},80)`;
+    }
+
+    // Default color
+    return "lightblue";
+}
+
+startBtn.onclick = () => {
+    const numClients = parseInt(document.getElementById("numClients").value);
+
+    // Clear previous grid
+    grid.innerHTML = "";
+
+    const clients = [];
+    const cells = [];
+
+    // Create cells
+    for (let i = 0; i < numClients; i++) {
+        const cell = document.createElement("div");
+        cell.className = "cell";
+        grid.appendChild(cell);
+        cells.push(cell);
+    }
+
+    // Start WebSocket clients
+    for (let i = 0; i < numClients; i++) {
+        const ws = new WebSocket("/ws"); // change to your server address
+
+        ws.onopen = () => {
+            // console.log(`Client ${i} connected`);
+            ws.send(JSON.stringify({
+                "Version": 1,
+                "Id": "client_" + i,
+                "IsControlPlaneMessage": true,
+                "Payload": {
+                    "Version": 1,
+                    "ControlPlaneOp": 0,
+                    "Payload": {"ChannelName": "t1"}
+                }
+            }));
+        };
+
+        ws.onmessage = async (event) => {
+            try {
+                // If the server sends binary or Blob data, convert it to text
+                let text;
+               
+                if (event.data instanceof Blob) {
+                    text = await event.data.text();
+                } else {
+                    text = event.data;
+                }
+          
+                // console.log(text.substring(3));
+
+                const msg = JSON.parse(text.substring(3));
+                const color = colorFromMessage(msg);
+                cells[i].style.backgroundColor = color;
+            } catch (e) {
+                console.warn("Invalid message:", event.data, e);
+            }
+        };
+
+        ws.onclose = () => {
+            console.log(`Client ${i} disconnected`);
+        };
+
+        clients.push(ws);
+    }
+};
+</script>
+</body>
+</html>

@@ -4,25 +4,33 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"log/slog"
 	"net/http"
 
-	"github.com/alphadose/haxmap"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
+	"github.com/kychandar/ottam/common"
 	"github.com/kychandar/ottam/services"
+	slogctx "github.com/veqryn/slog-context"
 )
 
 type server struct {
-	clietTracker    *haxmap.Map[string, chan<- []byte]
-	centSubscriber  services.CentralisedSubscriber
-	wsBridgeFactory func(centSubscriber services.CentralisedSubscriber, wsConnID string, conn *websocket.Conn, writerChannel <-chan []byte) services.WebSocketBridge
+	wsWriteChanManager services.WsWriteChanManager
+	centSubscriber     services.CentralisedSubscriber
+	wsBridgeFactory    func(centSubscriber services.CentralisedSubscriber, wsConnID string, conn *websocket.Conn, writerChannel <-chan common.IntermittenMsg) services.WebSocketBridge
+	logger             *slog.Logger
 }
 
-func New(centSubscriber services.CentralisedSubscriber, wsBridgeFactory func(centSubscriber services.CentralisedSubscriber, wsConnID string, conn *websocket.Conn, writerChannel <-chan []byte) services.WebSocketBridge) *server {
+func New(
+	centSubscriber services.CentralisedSubscriber,
+	wsBridgeFactory func(centSubscriber services.CentralisedSubscriber, wsConnID string, conn *websocket.Conn, writerChannel <-chan common.IntermittenMsg) services.WebSocketBridge,
+	wsWriteChanManager services.WsWriteChanManager,
+	logger *slog.Logger) *server {
 	return &server{
-		clietTracker:    haxmap.New[string, chan<- []byte](),
-		centSubscriber:  centSubscriber,
-		wsBridgeFactory: wsBridgeFactory,
+		centSubscriber:     centSubscriber,
+		wsBridgeFactory:    wsBridgeFactory,
+		wsWriteChanManager: wsWriteChanManager,
+		logger:             logger,
 	}
 }
 
@@ -43,31 +51,25 @@ var upgrader = websocket.Upgrader{
 	},
 }
 
-func (pooler *server) GetWriterChannelForClientID(clientID string) (chan<- []byte, bool) {
-	return pooler.clietTracker.Get(clientID)
-}
-
 func (pooler *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	log.Println("Client initiated!")
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Println("Upgrade error:", err)
 		return
 	}
-	writerChan := make(chan []byte, 150)
+	writerChan := make(chan common.IntermittenMsg, 15000)
 	wsConnID := uuid.New().String()
 
-	pooler.clietTracker.Set(wsConnID, writerChan)
+	pooler.wsWriteChanManager.SetWriterChannelForClientID(wsConnID, writerChan)
 	ctx, cancel := context.WithCancel(r.Context())
-
+	ctx = slogctx.NewCtx(ctx, pooler.logger)
 	defer func() {
 		cancel()
 		pooler.centSubscriber.UnsubscribeAll(context.TODO(), wsConnID)
-		pooler.clietTracker.Del(wsConnID)
+		pooler.wsWriteChanManager.DeleteClientID(wsConnID)
 		conn.Close()
 	}()
 
-	log.Println("Client connected!")
 	bridge := pooler.wsBridgeFactory(pooler.centSubscriber, wsConnID, conn, writerChan)
 	go bridge.ProcessMessagesFromServer(ctx)
 

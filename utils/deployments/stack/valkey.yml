@@ -1,0 +1,48 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: valkey
+  namespace: valkey
+  labels:
+    app: valkey
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: valkey
+  template:
+    metadata:
+      labels:
+        app: valkey
+    spec:
+      containers:
+        - name: valkey
+          image: valkey/valkey:alpine3.22
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 6379
+          # No persistent volume; data is ephemeral
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: valkey
+  namespace: valkey
+  labels:
+    app: valkey
+spec:
+  type: NodePort
+  selector:
+    app: valkey
+  ports:
+    - name: redis
+      port: 6379          # Cluster-internal port
+      targetPort: 6379    # Container port
+      nodePort: 30079     # Optional: fixed external port (must be 30000–32767)
