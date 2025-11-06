@@ -2,6 +2,7 @@ package centralisedSubscriber
 
 import (
 	"context"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -23,6 +24,13 @@ type centralisedSubscriber struct {
 	pubSubProvider     services.PubSubProvider
 	newMessageGetter   func() services.SerializableMessage
 	wsWriteChanManager services.WsWriteChanManager
+	fanoutCh           chan *fanoutJob
+	stopFanout         chan struct{}
+}
+
+type fanoutJob struct {
+	intMsg *common.IntermittenMsg
+	set    *haxmap.Map[string, struct{}]
 }
 
 func New(
@@ -38,12 +46,20 @@ func New(
 		wsWriteChanManager: wsWriteChanManager,
 		pubSubProvider:     pubSubProvider,
 		newMessageGetter:   newMessageGetter,
+		fanoutCh:           make(chan *fanoutJob, 1000),
+		stopFanout:         make(chan struct{}),
 	}
 }
 
 func (c *centralisedSubscriber) ProcessDownstreamMessages(ctx context.Context) error {
 	logger := slogctx.FromCtx(ctx).With("comoponent", "centralisedSubscriber")
 	logger.InfoContext(ctx, "starting service")
+
+	// Start fanout workers (async)
+	const numWorkers = 50
+	for i := 0; i < numWorkers; i++ {
+		go c.fanoutWorker(ctx, logger)
+	}
 
 	objPool := pool.GetGlobalPool()
 
@@ -83,30 +99,60 @@ func (c *centralisedSubscriber) ProcessDownstreamMessages(ctx context.Context) e
 
 		logger.Info("channels map fetched", "ms", time.Since(msg.GetPublishedTime()).String())
 
-		clientCount := 0
-		set.ForEach(func(clientID string, s2 struct{}) bool {
-			writeChan, exist := c.wsWriteChanManager.GetWriterChannelForClientID(clientID)
-			if !exist {
-				return true
-			}
+		// Send to worker pool (non-blocking fanout)
+		select {
+		case c.fanoutCh <- &fanoutJob{
+			intMsg: intMsg,
+			set:    set,
+		}:
+			logger.Info("msg sent to fanout queue after", "ms", time.Since(msg.GetPublishedTime()).String())
+		case <-ctx.Done():
+			objPool.ResetIntermittenMsg(intMsg)
+			return false
+		}
 
-			writeChan <- *intMsg
-			clientCount++
-			logger.Info("msg written to channel after", "ms", time.Since(msg.GetPublishedTime()).String())
-			return true
-		})
-
-		logger.Info("msg completely processed", "ms", time.Since(msg.GetPublishedTime()).String())
 		metrics.LatencyHist.WithLabelValues("cent_subscriber_done").Observe(float64(time.Since(msg.GetPublishedTime()).Milliseconds()))
-		
-		// Return the IntermittenMsg to the pool after all clients have received it
-		objPool.ResetIntermittenMsg(intMsg)
 		return true
 	})
 	if err != nil {
 		return err
 	}
 	return nil
+}
+
+// fanoutWorker processes messages and distributes them to subscribed clients
+func (c *centralisedSubscriber) fanoutWorker(ctx context.Context, logger *slog.Logger) {
+	objPool := pool.GetGlobalPool()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case job := <-c.fanoutCh:
+			if job == nil {
+				return
+			}
+
+			clientCount := 0
+			job.set.ForEach(func(clientID string, _ struct{}) bool {
+				writeChan, exist := c.wsWriteChanManager.GetWriterChannelForClientID(clientID)
+				if !exist {
+					return true
+				}
+
+				// Non-blocking write to client channel
+				select {
+				case writeChan <- *job.intMsg:
+					clientCount++
+				default:
+					// Client buffer full, drop message to prevent blocking
+					logger.Warn("client channel full, dropping message", "clientID", clientID, "msgID", job.intMsg.Id)
+				}
+				return true
+			})
+
+			objPool.ResetIntermittenMsg(job.intMsg)
+		}
+	}
 }
 
 // Subscribe adds a client to a channel

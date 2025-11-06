@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/kychandar/ottam/ds"
+	pubSubProvider "github.com/kychandar/ottam/services/pubsub/nats"
 )
 
 const url = "ws://localhost:30080/ws"
@@ -22,8 +24,21 @@ var (
 	msgBytes []byte
 )
 
-func Test3(t *testing.T) {
+func Test2(t *testing.T) {
 	fmt.Println("Connecting to:", url)
+
+	noOfClients := 2_000
+	testDuration := 5 * time.Second
+	msgPublishedEvery := 200 * time.Millisecond
+
+	maxPossibleMessages := int(testDuration/msgPublishedEvery) * noOfClients
+
+	fmt.Println("noOfClients", noOfClients)
+	fmt.Println("testDuration", testDuration.String())
+	fmt.Println("msgPublishedEvery", msgPublishedEvery.String())
+	fmt.Println("maxPossibleMessages", maxPossibleMessages)
+
+	maxSafeBufferRequired := maxPossibleMessages * 2
 
 	// Handle Ctrl+C
 	interrupt := make(chan os.Signal, 1)
@@ -49,41 +64,73 @@ func Test3(t *testing.T) {
 	}
 
 	// Channel for sending latencies
-	latencyCh := make(chan float64, 1000000000)
+	latencyCh := make(chan float64, maxSafeBufferRequired)
 	const fileName = "latencies.txt"
 	file, err := os.OpenFile(fileName, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 	if err != nil {
 		panic(err)
 	}
 	defer file.Close()
+	pubSub, err := pubSubProvider.NewNatsPubSub("localhost:30001")
+	if err != nil {
+		panic(err)
+	}
+	defer pubSub.Close()
 	// Writer goroutine
+	latencies := make([]float64, 0, maxSafeBufferRequired)
+
 	go func() {
 		for latency := range latencyCh {
-			fmt.Fprintf(file, "%.6f\n", latency)
+			// fmt.Fprintf(file, "%.6f\n", latency)
+			latencies = append(latencies, latency)
 		}
 	}()
 
 	wg := &sync.WaitGroup{}
-	n := 1000
+
 	ctx, cancel := context.WithCancel(context.TODO())
 
-	for i := 0; i < n; i++ {
+	for i := 0; i < noOfClients; i++ {
 		go wsConn(ctx, wg, latencyCh)
 	}
 
 	// Run for a while
-	testDuration := 30 * time.Second
+	done := make(chan struct{})
+	go func(done chan struct{}) {
+		ticker1 := time.NewTicker(msgPublishedEvery)
+		for {
+			select {
+			case <-done:
+				fmt.Println("publisher stopped")
+				return
+			case <-ticker1.C:
+				msg, _ := ds.New("t1", []byte("hi"))
+				msgByte, err := msg.Serialize()
+				if err != nil {
+					panic(err)
+				}
+				err = pubSub.Publish("centralProcessor", msgByte)
+				if err != nil {
+					panic(err)
+				}
+			}
+		}
+	}(done)
+
+	ticker := time.NewTicker(testDuration)
 	select {
 	case <-interrupt:
 		fmt.Printf("Stopping ")
 		cancel()
-	case <-time.After(testDuration):
-		fmt.Printf("Stopping after %v\n", testDuration)
+	case <-ticker.C:
+		close(done)
+		fmt.Printf("Stopping after %s\n", testDuration.String())
 		cancel()
 	}
-	wg.Wait()
 
-	printLatencyStatsFromFile(fileName)
+	wg.Wait()
+	// printLatencyStatsFromFile(fileName)
+	printLatencyStatsFromSlice(latencies)
 }
 
 func wsConn(ctx context.Context, wg *sync.WaitGroup, writerChan chan<- float64) {
@@ -120,12 +167,15 @@ func wsConn(ctx context.Context, wg *sync.WaitGroup, writerChan chan<- float64) 
 			}
 
 			latencyNs := time.Since(m.GetPublishedTime()).Nanoseconds()
-			fmt.Println(time.Since(m.GetPublishedTime()).Seconds())
 			latencyMs := float64(latencyNs) / 1e6
-			writerChan <- latencyMs
+			select {
+			case writerChan <- latencyMs:
+			default:
+			}
 		}
 	}
 }
+
 func printLatencyStatsFromFile(fileName string) {
 	file, err := os.Open(fileName)
 	if err != nil {
@@ -151,10 +201,16 @@ func printLatencyStatsFromFile(fileName string) {
 	if err := scanner.Err(); err != nil {
 		log.Fatalf("scanner error: %v", err)
 	}
+	printLatencyStatsFromSlice(latencies)
+}
 
+func printLatencyStatsFromSlice(latencies []float64) {
+	fmt.Print(returnStats(latencies))
+}
+
+func returnStats(latencies []float64) string {
 	if len(latencies) == 0 {
-		fmt.Println("No latency samples found in file.")
-		return
+		return "No latency samples found in file."
 	}
 
 	sort.Float64s(latencies) // sort slice
@@ -180,21 +236,33 @@ func printLatencyStatsFromFile(fileName string) {
 		return latencies[i] + (latencies[i+1]-latencies[i])*f
 	}
 
-	fmt.Println("--------- Latency Summary (ms) ---------")
-	fmt.Printf("Samples: %d\n", n)
-	fmt.Printf("Min: %.3f ms\n", min)
-	fmt.Printf("Max: %.3f ms\n", max)
-	fmt.Printf("Avg: %.3f ms\n", avg)
-	fmt.Printf("P70: %.3f ms\n", p(70))
-	fmt.Printf("P75: %.3f ms\n", p(75))
-	fmt.Printf("P80: %.3f ms\n", p(80))
-	fmt.Printf("P85: %.3f ms\n", p(85))
-	fmt.Printf("P90: %.3f ms\n", p(90))
-	fmt.Printf("P95: %.3f ms\n", p(95))
-	fmt.Printf("P99: %.3f ms\n", p(99))
-	fmt.Printf("P99.9: %.3f ms\n", p(99.9))
-	fmt.Printf("P99.99: %.3f ms\n", p(99.99))
-	fmt.Println("----------------------------------------")
+	summary := "--------- Latency Summary (ms) ---------\n" +
+		fmt.Sprintf("Samples: %d\n", n) +
+		fmt.Sprintf("Samples: %s\n", formatSamples(n)) +
+		fmt.Sprintf("Min: %.3f ms\n", min) +
+		fmt.Sprintf("Max: %.3f ms\n", max) +
+		fmt.Sprintf("Avg: %.3f ms\n", avg) +
+		fmt.Sprintf("P70: %.3f ms\n", p(70)) +
+		fmt.Sprintf("P75: %.3f ms\n", p(75)) +
+		fmt.Sprintf("P80: %.3f ms\n", p(80)) +
+		fmt.Sprintf("P85: %.3f ms\n", p(85)) +
+		fmt.Sprintf("P90: %.3f ms\n", p(90)) +
+		fmt.Sprintf("P95: %.3f ms\n", p(95)) +
+		fmt.Sprintf("P99: %.3f ms\n", p(99)) +
+		fmt.Sprintf("P99.9: %.3f ms\n", p(99.9)) +
+		fmt.Sprintf("P99.99: %.3f ms\n", p(99.99)) +
+		"----------------------------------------\n"
+
+	return summary
+}
+
+func formatSamples(n int) string {
+	if n >= 1_000_000 {
+		return fmt.Sprintf("%.2f M samples", float64(n)/1_000_000)
+	} else if n >= 1_000 {
+		return fmt.Sprintf("%.2f k samples", float64(n)/1_000)
+	}
+	return fmt.Sprintf("%d samples", n)
 }
 
 type Msg struct {

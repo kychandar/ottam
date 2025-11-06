@@ -94,7 +94,7 @@ func NewAsyncLogger() (*slog.Logger, func()) {
 	// Create core with buffered writers
 	core := zapcore.NewTee(
 		zapcore.NewCore(fileEncoder, bufferedFileWriter, zapcore.InfoLevel),
-		zapcore.NewCore(consoleEncoder, bufferedConsoleWriter, zapcore.ErrorLevel),
+		zapcore.NewCore(consoleEncoder, bufferedConsoleWriter, zapcore.WarnLevel),
 	)
 
 	// Build zap logger

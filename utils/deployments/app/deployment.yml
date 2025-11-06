@@ -88,8 +88,8 @@ spec:
               cpu: "100m"
               memory: "128Mi"
             limits:
-              cpu: "4"
-              memory: "2Gi"            
+              cpu: "2"
+              memory: "4Gi"            
       volumes:
         - name: config-volume
           configMap:

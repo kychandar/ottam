@@ -1,0 +1,25 @@
+----------------------------------------
+6th 11 2025 - 2 CPU - 4GiB mem
+----------------------------------------
+noOfClients 2000
+testDuration 30s
+msgPublishedEvery 200ms
+maxPossibleMessages 300000
+Stopping after 30s
+publisher stopped
+--------- Latency Summary (ms) ---------
+Samples: 296921
+Samples: 296.92 k samples
+Min: 2.789 ms
+Max: 273.065 ms
+Avg: 30.578 ms
+P70: 36.905 ms
+P75: 40.254 ms
+P80: 43.868 ms
+P85: 47.794 ms
+P90: 52.507 ms
+P95: 59.433 ms
+P99: 147.336 ms
+P99.9: 244.947 ms
+P99.99: 258.191 ms
+----------------------------------------
