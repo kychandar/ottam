@@ -46,7 +46,7 @@ func New(
 		wsWriteChanManager: wsWriteChanManager,
 		pubSubProvider:     pubSubProvider,
 		newMessageGetter:   newMessageGetter,
-		fanoutCh:           make(chan *fanoutJob, 1000),
+		fanoutCh:           make(chan *fanoutJob, 10000), // Increased buffer for burst handling
 		stopFanout:         make(chan struct{}),
 	}
 }
@@ -56,7 +56,9 @@ func (c *centralisedSubscriber) ProcessDownstreamMessages(ctx context.Context) e
 	logger.InfoContext(ctx, "starting service")
 
 	// Start fanout workers (async)
-	const numWorkers = 50
+	// Increased from 50 to 500 to handle high connection count efficiently
+	// Each worker handles ~10 connections, reducing contention
+	const numWorkers = 500
 	for i := 0; i < numWorkers; i++ {
 		go c.fanoutWorker(ctx, logger)
 	}

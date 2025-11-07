@@ -57,7 +57,8 @@ func (pooler *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		log.Println("Upgrade error:", err)
 		return
 	}
-	writerChan := make(chan common.IntermittenMsg, 15000)
+	// Larger buffer to handle burst traffic without blocking fanout workers
+	writerChan := make(chan common.IntermittenMsg, 5000)
 	wsConnID := uuid.New().String()
 
 	pooler.wsWriteChanManager.SetWriterChannelForClientID(wsConnID, writerChan)
