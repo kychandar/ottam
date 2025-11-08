@@ -216,22 +216,11 @@ data:
       - job_name: 'ottam_message_latency_http_server'
         scrape_interval: 1s
         metrics_path: /metrics
-        static_configs:
-          - targets: 
-              - 'ottam-http-server.valkey.svc:8080'        # Replace with your app host:port
+        dns_sd_configs:
+          - names:
+              - 'ottam-http-server-headless.valkey.svc.cluster.local'
+            type: 'A'      # fetch all A records (pod IPs)
+            port: 8080
         relabel_configs:
-          # Optional: add labels or rename the job
-          - source_labels: [__address__]
-            target_label: instance
-
-      # --- ottam cent processor---
-      - job_name: 'ottam_message_latency_cent_processor'
-        scrape_interval: 1s
-        metrics_path: /metrics
-        static_configs:
-          - targets: 
-              - 'ottam-central-prcessor.valkey.svc:8081'        # Replace with your app host:port
-        relabel_configs:
-          # Optional: add labels or rename the job
           - source_labels: [__address__]
             target_label: instance

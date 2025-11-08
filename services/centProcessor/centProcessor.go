@@ -59,20 +59,20 @@ func (c *centralProcessorImpl) Start(ctx context.Context) error {
 	logger := slogctx.FromCtx(ctx)
 	logger.InfoContext(ctx, "starting service")
 
-	err := c.js.CreateStream(centProcessorStream, []string{centProcessorStream})
+	err := c.js.CreateOrUpdateStream(ctx, centProcessorStream, []string{centProcessorStream})
 	if err != nil && err != nats.ErrStreamNameAlreadyInUse {
 		return err
 	}
 
 	// Subscribe to NATS JetStream
-	err = c.js.Subscribe(centProcessorConsumer, centProcessorStream, func(msgBytes []byte) bool {
+	err = c.js.Subscribe(ctx, centProcessorConsumer, centProcessorStream, func(msgBytes []byte) bool {
 		msg := c.newMessage()
 		if err := msg.DeserializeFrom(msgBytes); err != nil {
 			logger.Error("failed to deserialize message")
 			return false
 		}
 
-		metrics.LatencyHist.WithLabelValues("cent_processor_start").Observe(float64(time.Since(msg.GetPublishedTime()).Milliseconds()))
+		metrics.LatencyHist.WithLabelValues(metrics.Hostname, "cent_processor_start").Observe(float64(time.Since(msg.GetPublishedTime()).Milliseconds()))
 
 		logger := logger.With("id", msg.GetMsgID())
 		logger.InfoContext(ctx, "msg recieved after", "ms", time.Since(msg.GetPublishedTime()).String())
@@ -102,13 +102,13 @@ func (c *centralProcessorImpl) Start(ctx context.Context) error {
 		// 	return false
 		// }
 
-		err := c.js.Publish(common.ServerSubjFormat("node1"), msgBytes)
+		err := c.js.Publish(ctx, common.ServerSubjFormat("node1"), msgBytes)
 		if err != nil {
 			logger.ErrorContext(ctx, "error in publishing", "err", err)
 			return false
 		}
 		logger.InfoContext(ctx, "published to all nodes after", "ms", time.Since(msg.GetPublishedTime()).String())
-		metrics.LatencyHist.WithLabelValues("cent_processor_done").Observe(float64(time.Since(msg.GetPublishedTime()).Milliseconds()))
+		metrics.LatencyHist.WithLabelValues(metrics.Hostname, "cent_processor_done").Observe(float64(time.Since(msg.GetPublishedTime()).Milliseconds()))
 
 		return true
 	})

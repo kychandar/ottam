@@ -14,11 +14,13 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/kychandar/ottam/common"
 	"github.com/kychandar/ottam/ds"
 	pubSubProvider "github.com/kychandar/ottam/services/pubsub/nats"
 )
 
 const url = "ws://localhost:30080/ws"
+const natsURL = "localhost:30001"
 
 var (
 	msgBytes []byte
@@ -27,8 +29,8 @@ var (
 func Test2(t *testing.T) {
 	fmt.Println("Connecting to:", url)
 
-	noOfClients := 2_000
-	testDuration := 5 * time.Second
+	noOfClients := 1
+	testDuration := 10 * time.Second
 	msgPublishedEvery := 200 * time.Millisecond
 
 	maxPossibleMessages := int(testDuration/msgPublishedEvery) * noOfClients
@@ -71,7 +73,7 @@ func Test2(t *testing.T) {
 		panic(err)
 	}
 	defer file.Close()
-	pubSub, err := pubSubProvider.NewNatsPubSub("localhost:30001")
+	pubSub, err := pubSubProvider.NewNatsPubSub(natsURL)
 	if err != nil {
 		panic(err)
 	}
@@ -109,7 +111,8 @@ func Test2(t *testing.T) {
 				if err != nil {
 					panic(err)
 				}
-				err = pubSub.Publish("centralProcessor", msgByte)
+
+				err = pubSub.Publish(context.TODO(), common.ChannelSubjFormat(string(msg.GetChannelName())), msgByte)
 				if err != nil {
 					panic(err)
 				}
@@ -136,7 +139,9 @@ func Test2(t *testing.T) {
 func wsConn(ctx context.Context, wg *sync.WaitGroup, writerChan chan<- float64) {
 	wg.Add(1)
 	defer wg.Done()
-	conn, _, err := websocket.DefaultDialer.Dial(url, nil)
+	dialer := *websocket.DefaultDialer
+	dialer.HandshakeTimeout = 5 * time.Second
+	conn, _, err := dialer.Dial(url, nil)
 	if err != nil {
 		log.Fatal("dial:", err)
 	}
@@ -146,6 +151,14 @@ func wsConn(ctx context.Context, wg *sync.WaitGroup, writerChan chan<- float64) 
 		log.Println("write error:", err)
 		return
 	}
+	readTimeout := 30 * time.Second
+
+	conn.SetReadDeadline(time.Now().Add(readTimeout))
+	conn.SetPongHandler(func(string) error {
+		// extend deadline every time we get a Pong
+		conn.SetReadDeadline(time.Now().Add(readTimeout))
+		return nil
+	})
 
 	for {
 		select {

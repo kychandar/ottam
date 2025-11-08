@@ -2,17 +2,18 @@ package centralisedSubscriber
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
 
 	"github.com/alphadose/haxmap"
+	set "github.com/duke-git/lancet/v2/datastructure/set"
 	"github.com/gorilla/websocket"
 	"github.com/kychandar/ottam/common"
 	"github.com/kychandar/ottam/metrics"
 	"github.com/kychandar/ottam/services"
 	"github.com/kychandar/ottam/services/pool"
-	"github.com/nats-io/nats.go"
 	slogctx "github.com/veqryn/slog-context"
 )
 
@@ -20,12 +21,13 @@ type centralisedSubscriber struct {
 	lock               sync.RWMutex
 	channelsTracker    *haxmap.Map[common.ChannelName, *haxmap.Map[string, struct{}]]
 	nodeID             common.NodeID
-	dataStore          services.DataStore
 	pubSubProvider     services.PubSubProvider
 	newMessageGetter   func() services.SerializableMessage
 	wsWriteChanManager services.WsWriteChanManager
+	workerPool         services.WorkerPool
 	fanoutCh           chan *fanoutJob
 	stopFanout         chan struct{}
+	subscriptionSyncer chan struct{}
 }
 
 type fanoutJob struct {
@@ -34,49 +36,93 @@ type fanoutJob struct {
 }
 
 func New(
-	dataStore services.DataStore,
 	nodeID common.NodeID,
 	wsWriteChanManager services.WsWriteChanManager,
+	workerPool services.WorkerPool,
 	newMessageGetter func() services.SerializableMessage,
 	pubSubProvider services.PubSubProvider) services.CentralisedSubscriber {
 	return &centralisedSubscriber{
-		dataStore:          dataStore,
 		nodeID:             nodeID,
 		channelsTracker:    haxmap.New[common.ChannelName, *haxmap.Map[string, struct{}]](),
 		wsWriteChanManager: wsWriteChanManager,
+		workerPool:         workerPool,
 		pubSubProvider:     pubSubProvider,
 		newMessageGetter:   newMessageGetter,
 		fanoutCh:           make(chan *fanoutJob, 10000), // Increased buffer for burst handling
 		stopFanout:         make(chan struct{}),
+		subscriptionSyncer: make(chan struct{}, 2),
+	}
+}
+
+func (c *centralisedSubscriber) SubscriptionSyncer(ctx context.Context) {
+	fmt.Println("SubscriptionSyncer startee")
+
+	logger := slogctx.FromCtx(ctx).With("comoponent", "centralisedSubscriber")
+	logger.DebugContext(ctx, "starting subscription syncer")
+	actualSubsSet := set.New[common.ChannelName]()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-c.subscriptionSyncer:
+			fmt.Println("SubscriptionSyncer started")
+			requiredSubsSet := set.New[common.ChannelName]()
+
+			for x := range c.channelsTracker.Keys() {
+				requiredSubsSet.Add(x)
+			}
+
+			if actualSubsSet.Equal(requiredSubsSet) {
+				continue
+			}
+
+			keys := make([]string, 0, len(requiredSubsSet))
+			for cn := range requiredSubsSet {
+				keys = append(keys, common.ChannelSubjFormat(string(cn)))
+			}
+
+			err := c.pubSubProvider.CreateOrUpdateConsumer(ctx, common.OttamServerStreamName, string(c.nodeID), keys)
+			if err != nil {
+				logger.ErrorContext(ctx, "error in updating consumer", "err", err)
+				c.subscriptionSyncer <- struct{}{}
+			}
+			fmt.Println("SubscriptionSyncer completed", keys)
+		}
 	}
 }
 
 func (c *centralisedSubscriber) ProcessDownstreamMessages(ctx context.Context) error {
 	logger := slogctx.FromCtx(ctx).With("comoponent", "centralisedSubscriber")
 	logger.InfoContext(ctx, "starting service")
-
+	fmt.Println("ProcessDownstreamMessages startee")
 	// Start fanout workers (async)
 	// Increased from 50 to 500 to handle high connection count efficiently
 	// Each worker handles ~10 connections, reducing contention
-	const numWorkers = 500
+	const numWorkers = 200
 	for i := 0; i < numWorkers; i++ {
 		go c.fanoutWorker(ctx, logger)
 	}
 
 	objPool := pool.GetGlobalPool()
 
-	err := c.pubSubProvider.CreateStream(common.ServerSubjFormat(string(c.nodeID)), []string{common.ServerSubjFormat(string(c.nodeID))})
-	if err != nil && err != nats.ErrStreamNameAlreadyInUse {
+	err := c.pubSubProvider.CreateOrUpdateStream(ctx, common.OttamServerStreamName, []string{common.ChannelSubjFormat(">")})
+	if err != nil {
 		return err
 	}
 
-	err = c.pubSubProvider.Subscribe(string(c.nodeID), common.ServerSubjFormat(string(c.nodeID)), func(msgBytes []byte) bool {
+	err = c.pubSubProvider.CreateOrUpdateConsumer(ctx, common.OttamServerStreamName, string(c.nodeID), []string{common.ChannelSubjFormat("none")})
+	if err != nil {
+		return err
+	}
+
+	var callBack func(msgBytes []byte) bool
+	callBack = func(msgBytes []byte) bool {
 		msg := c.newMessageGetter()
 		if err := msg.DeserializeFrom(msgBytes); err != nil {
 			logger.ErrorContext(ctx, "failed to deserialize message", "err", err, "msg", string(msgBytes))
 			return true
 		}
-		metrics.LatencyHist.WithLabelValues("cent_subscriber_start").Observe(float64(time.Since(msg.GetPublishedTime()).Milliseconds()))
+		metrics.LatencyHist.WithLabelValues(metrics.Hostname, "cent_subscriber_start").Observe(float64(time.Since(msg.GetPublishedTime()).Milliseconds()))
 		pm, err := websocket.NewPreparedMessage(websocket.BinaryMessage, msgBytes)
 		if err != nil {
 			logger.ErrorContext(ctx, "failed to prepare ws message", "err", err, "msg", string(msgBytes))
@@ -113,9 +159,11 @@ func (c *centralisedSubscriber) ProcessDownstreamMessages(ctx context.Context) e
 			return false
 		}
 
-		metrics.LatencyHist.WithLabelValues("cent_subscriber_done").Observe(float64(time.Since(msg.GetPublishedTime()).Milliseconds()))
+		metrics.LatencyHist.WithLabelValues(metrics.Hostname, "cent_subscriber_done").Observe(float64(time.Since(msg.GetPublishedTime()).Milliseconds()))
 		return true
-	})
+	}
+
+	err = c.pubSubProvider.Subscribe(ctx, common.OttamServerStreamName, string(c.nodeID), callBack)
 	if err != nil {
 		return err
 	}
@@ -134,24 +182,24 @@ func (c *centralisedSubscriber) fanoutWorker(ctx context.Context, logger *slog.L
 				return
 			}
 
-			clientCount := 0
+			// We need to preserve the PreparedMessage for all clients since we're resetting intMsg
+			// Multiple workers will use this same PreparedMessage concurrently (which is safe per gorilla/websocket docs)
+			preparedMsg := job.intMsg.PreparedMessage
+			publishedTime := job.intMsg.PublishedTime
+			msgID := job.intMsg.Id
+
 			job.set.ForEach(func(clientID string, _ struct{}) bool {
-				writeChan, exist := c.wsWriteChanManager.GetWriterChannelForClientID(clientID)
+				conn, exist := c.wsWriteChanManager.GetConnectionForClientID(clientID)
 				if !exist {
 					return true
 				}
 
-				// Non-blocking write to client channel
-				select {
-				case writeChan <- *job.intMsg:
-					clientCount++
-				default:
-					// Client buffer full, drop message to prevent blocking
-					logger.Warn("client channel full, dropping message", "clientID", clientID, "msgID", job.intMsg.Id)
-				}
+				// Submit directly to worker pool with the extracted values
+				c.workerPool.SubmitMessageJob(ctx, conn, preparedMsg, publishedTime, msgID, clientID)
 				return true
 			})
 
+			// Now safe to reset since we extracted what we need
 			objPool.ResetIntermittenMsg(job.intMsg)
 		}
 	}
@@ -159,21 +207,24 @@ func (c *centralisedSubscriber) fanoutWorker(ctx context.Context, logger *slog.L
 
 // Subscribe adds a client to a channel
 func (s *centralisedSubscriber) Subscribe(ctx context.Context, clientID string, channelName common.ChannelName) error {
+	fmt.Println("subscribe called for ", clientID, channelName)
 	s.lock.RLock()
 	subMap, exist := s.channelsTracker.Get(channelName)
 	s.lock.RUnlock()
 	if !exist {
+		fmt.Println("channel does not exist")
 		s.lock.Lock()
 		subMap, exist = s.channelsTracker.Get(channelName)
 		if !exist {
-
-			err := s.dataStore.AddNodeSubscriptionForChannel(ctx, channelName, s.nodeID)
-			if err != nil {
-				s.lock.Unlock()
-				return err
-			}
 			subMap = haxmap.New[string, struct{}]()
 			s.channelsTracker.Set(channelName, subMap)
+			fmt.Println("added channel to sync map", s.channelsTracker.Len())
+			select {
+			case s.subscriptionSyncer <- struct{}{}:
+				fmt.Println("triggerd syncer")
+			default:
+				fmt.Println("not triggerd syncer")
+			}
 		}
 		s.lock.Unlock()
 	}
@@ -201,16 +252,14 @@ func (s *centralisedSubscriber) UnSubscribe(ctx context.Context, clientID string
 			return nil
 		}
 		if subMap.Len() == 1 {
-			err := s.dataStore.RemoveNodeSubscriptionForChannel(ctx, channelName, s.nodeID)
-			if err != nil {
-				s.lock.Unlock()
-				return err
-			}
 			s.channelsTracker.Del(channelName)
+			select {
+			case s.subscriptionSyncer <- struct{}{}:
+			default:
+			}
 		} else {
 			subMap.Del(clientID)
 		}
-
 	}
 	return nil
 }

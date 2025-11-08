@@ -4,13 +4,15 @@ import (
 	"context"
 	"time"
 
+	"github.com/gorilla/websocket"
 	"github.com/kychandar/ottam/common"
 )
 
 type PubSubProvider interface {
-	CreateStream(streamName string, subjects []string) error
-	Publish(subjectName string, data []byte) error
-	Subscribe(consumerName string, subjectName string, callBack func(msg []byte) bool) error
+	CreateOrUpdateStream(ctx context.Context, streamName string, subjects []string) error
+	Publish(ctx context.Context, subjectName string, data []byte) error
+	CreateOrUpdateConsumer(ctx context.Context, streamName, consumerName string, subjects []string) error
+	Subscribe(ctx context.Context, streamName, consumerName string, callBack func(msg []byte) bool) error
 	UnSubscribe(consumerName string) error
 	Close() error
 }
@@ -44,12 +46,16 @@ type CentralisedSubscriber interface {
 	Subscribe(ctx context.Context, clientID string, channelName common.ChannelName) error
 	UnSubscribe(ctx context.Context, clientID string, channelName common.ChannelName) error
 	UnsubscribeAll(ctx context.Context, clientID string) error
-
+	SubscriptionSyncer(ctx context.Context)
 	ProcessDownstreamMessages(ctx context.Context) error
 }
 
 type WsWriteChanManager interface {
-	GetWriterChannelForClientID(clientID string) (chan<- common.IntermittenMsg, bool)
-	SetWriterChannelForClientID(clientID string, writerChan chan<- common.IntermittenMsg)
+	GetConnectionForClientID(clientID string) (*websocket.Conn, bool)
+	SetConnectionForClientID(clientID string, conn *websocket.Conn)
 	DeleteClientID(clientID string)
+}
+
+type WorkerPool interface {
+	SubmitMessageJob(ctx context.Context, conn *websocket.Conn, preparedMsg *websocket.PreparedMessage, publishedTime time.Time, msgID string, wsConnID string)
 }

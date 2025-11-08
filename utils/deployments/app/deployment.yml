@@ -6,7 +6,7 @@ metadata:
   labels:
     app: ottam-central-prcessor
 spec:
-  replicas: 1
+  replicas: 0
   selector:
     matchLabels:
       app: ottam-central-prcessor
@@ -94,6 +94,19 @@ spec:
         - name: config-volume
           configMap:
             name: go-server-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ottam-http-server-headless
+  namespace: valkey
+spec:
+  clusterIP: None
+  selector:
+    app: ottam-http-server
+  ports:
+    - port: 8080
+      targetPort: 8080
 ---
 apiVersion: v1
 kind: Service

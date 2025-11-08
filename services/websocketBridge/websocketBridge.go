@@ -5,26 +5,20 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/kychandar/ottam/common"
 	"github.com/kychandar/ottam/ds"
-	"github.com/kychandar/ottam/metrics"
 	"github.com/kychandar/ottam/services"
 	"github.com/kychandar/ottam/services/pool"
-	slogctx "github.com/veqryn/slog-context"
 )
 
 func NewWsBridgeFactory() func(
 	centSubscriber services.CentralisedSubscriber,
-	wsConnID string, conn *websocket.Conn,
-	writerChannel <-chan common.IntermittenMsg) services.WebSocketBridge {
-	return func(centSubscriber services.CentralisedSubscriber, wsConnID string, conn *websocket.Conn, writerChannel <-chan common.IntermittenMsg) services.WebSocketBridge {
+	wsConnID string, conn *websocket.Conn) services.WebSocketBridge {
+	return func(centSubscriber services.CentralisedSubscriber, wsConnID string, conn *websocket.Conn) services.WebSocketBridge {
 		return &websocketBridge{
 			wsConnID:       wsConnID,
 			conn:           conn,
-			writerChannel:  writerChannel,
 			centSubscriber: centSubscriber,
 		}
 	}
@@ -33,31 +27,14 @@ func NewWsBridgeFactory() func(
 type websocketBridge struct {
 	wsConnID       string
 	conn           *websocket.Conn
-	writerChannel  <-chan common.IntermittenMsg
 	centSubscriber services.CentralisedSubscriber
 }
 
-// ProcessMessagesFromServer implements services.WebSocketBridge.
+// ProcessMessagesFromServer is no longer needed - messages go directly to worker pool from fanout workers
 func (w *websocketBridge) ProcessMessagesFromServer(ctx context.Context) {
-	logger := slogctx.FromCtx(ctx).With("comoponent", "wsBridge", "cliend-id", w.wsConnID)
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case intMsg := <-w.writerChannel:
-			logger := logger.With("msg-id", intMsg.Id)
-			logger.InfoContext(ctx, "trying to write msg", "ms", time.Since(intMsg.PublishedTime).String())
-			metrics.LatencyHist.WithLabelValues("ws_bridge_ws_msg_write_start").Observe(float64(time.Since(intMsg.PublishedTime).Milliseconds()))
-			err := w.conn.WritePreparedMessage(intMsg.PreparedMessage)
-			// err := w.conn.WriteMessage(websocket.BinaryMessage, intMsg.Data)
-			if err != nil {
-				fmt.Println("error in writing ws msg:", err)
-				return
-			}
-			metrics.LatencyHist.WithLabelValues("ws_bridge_ws_msg_write_done").Observe(float64(time.Since(intMsg.PublishedTime).Milliseconds()))
-			logger.InfoContext(ctx, "msg written to ws", "ms", time.Since(intMsg.PublishedTime).String())
-		}
-	}
+	// No-op: This method is kept to satisfy the interface but does nothing
+	// Messages are now sent directly from fanout workers to the worker pool
+	<-ctx.Done()
 }
 
 // ProcessMessagesFromClient implements services.WebSocketBridge.
@@ -75,7 +52,7 @@ func (w *websocketBridge) ProcessMessagesFromClient(ctx context.Context) {
 			}
 			break
 		}
-
+		fmt.Println("read message from client")
 		// Get ClientMessage from pool instead of allocating new
 		clientMessage := objPool.ClientMessage.Get()
 		err = json.Unmarshal(message, clientMessage)
@@ -121,7 +98,7 @@ func (w *websocketBridge) ProcessMessagesFromClient(ctx context.Context) {
 				objPool.ResetControlPlaneMessage(contrlPlaneMsg)
 				continue
 			}
-			
+
 			objPool.ResetClientMessage(clientMessage)
 			objPool.ResetControlPlaneMessage(contrlPlaneMsg)
 		} else {
@@ -157,7 +134,7 @@ func (w *websocketBridge) handleSubscriptionOp(op ds.ControlPlaneOp, data []byte
 	case ds.StopSubscription:
 		result = w.centSubscriber.UnSubscribe(context.TODO(), w.wsConnID, subscriptonPayload.ChannelName)
 	}
-	
+
 	objPool.ResetSubscriptionPayload(subscriptonPayload)
 	return result
 }

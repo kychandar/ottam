@@ -1,24 +1,24 @@
 package pubSubProvider
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
-	"sort"
 	"strconv"
 	"sync"
 	"time"
 
 	"github.com/kychandar/ottam/services"
 	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
 )
 
 type NatsPubSub struct {
-	nc       *nats.Conn
-	js       nats.JetStreamContext
-	subs     map[string]*nats.Subscription
-	mu       sync.Mutex
-	streamMu sync.Mutex
+	nc                  *nats.Conn
+	js                  jetstream.JetStream
+	consumerConsumption map[string]jetstream.ConsumeContext
+	lock                sync.Mutex
 }
 
 func NewNatsPubSub(natsURL string) (services.PubSubProvider, error) {
@@ -27,83 +27,43 @@ func NewNatsPubSub(natsURL string) (services.PubSubProvider, error) {
 		return nil, fmt.Errorf("nats connect: %w", err)
 	}
 
-	js, err := nc.JetStream()
+	js, err := jetstream.New(nc)
 	if err != nil {
-		nc.Close()
-		return nil, fmt.Errorf("create jetstream: %w", err)
+		return nil, fmt.Errorf("failed to create JetStream context: %w", err)
 	}
 
 	return &NatsPubSub{
-		nc:   nc,
-		js:   js,
-		subs: make(map[string]*nats.Subscription),
+		nc:                  nc,
+		js:                  js,
+		consumerConsumption: make(map[string]jetstream.ConsumeContext),
 	}, nil
 }
 
-func (n *NatsPubSub) CreateStream(streamName string, subjects []string) error {
-	n.streamMu.Lock()
-	defer n.streamMu.Unlock()
+func (n *NatsPubSub) CreateOrUpdateStream(ctx context.Context, streamName string, subjects []string) error {
+	n.lock.Lock()
+	defer n.lock.Unlock()
 
-	// Try to fetch existing stream info
-	streamInfo, err := n.js.StreamInfo(streamName)
-	if err != nil {
-		if err == nats.ErrStreamNotFound {
-			// Not found -> create it
-			cfg := &nats.StreamConfig{
-				Name:     streamName,
-				Subjects: subjects,
-				MaxAge:   2 * time.Second,
-			}
-			if _, err := n.js.AddStream(cfg); err != nil {
-				return fmt.Errorf("create stream: %w", err)
-			}
-			return nil
-		}
-		// Any other error
-		return fmt.Errorf("get stream info: %w", err)
-	}
+	_, err := n.js.CreateOrUpdateStream(ctx, jetstream.StreamConfig{
+		Name:     streamName,
+		Subjects: subjects,
+		MaxAge:   2 * time.Minute,
+	})
 
-	// Stream exists — check if subjects are up to date
-	if !subjectsMatch(streamInfo.Config.Subjects, subjects) {
-		updated := streamInfo.Config
-		updated.Subjects = subjects
-		if _, err := n.js.UpdateStream(&updated); err != nil {
-			return fmt.Errorf("update stream: %w", err)
-		}
-	}
-
-	return nil
+	return err
 }
 
-func subjectsMatch(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	sort.Strings(a)
-	sort.Strings(b)
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
-}
-
-func (n *NatsPubSub) Publish(subjectName string, data []byte) error {
-	_, err := n.js.Publish(subjectName, data)
+func (n *NatsPubSub) Publish(ctx context.Context, subjectName string, data []byte) error {
+	_, err := n.js.Publish(ctx, subjectName, data)
 	if err != nil {
 		return fmt.Errorf("publish: %w", err)
 	}
 	return nil
 }
 
-func (n *NatsPubSub) Subscribe(consumerName string, subjectName string, callBack func(msg []byte) bool) error {
-	n.mu.Lock()
-	defer n.mu.Unlock()
+func (n *NatsPubSub) CreateOrUpdateConsumer(ctx context.Context, streamName, consumerName string, subjects []string) error {
+	n.lock.Lock()
+	defer n.lock.Unlock()
 
-	if _, ok := n.subs[consumerName]; ok {
-		return fmt.Errorf("consumer %s already subscribed", consumerName)
-	}
 	maxWorkers := 100
 	maxWorkersString, exist := os.LookupEnv("MAX_WORKERS")
 	if exist {
@@ -114,71 +74,59 @@ func (n *NatsPubSub) Subscribe(consumerName string, subjectName string, callBack
 			maxWorkers = parsed
 		}
 	}
-	// const (
-	// 	numWorkers = 200
-	// 	bufferSize = 2000
-	// )
 
-	// type msgJob struct {
-	// 	msg *nats.Msg
-	// }
+	_, err := n.js.CreateOrUpdateConsumer(ctx, streamName, jetstream.ConsumerConfig{
+		Name:           consumerName,
+		MaxAckPending:  maxWorkers,
+		FilterSubjects: subjects,
+		DeliverPolicy:  jetstream.DeliverNewPolicy,
+	})
 
-	// workCh := make(chan msgJob, bufferSize)
+	return err
+}
 
-	// for i := 0; i < numWorkers; i++ {
-	// 	go func(workerID int) {
-	// 		for job := range workCh {
-	// 			if callBack(job.msg.Data) {
-	// 				if err := job.msg.Ack(); err != nil {
-	// 					log.Printf("worker %d ack error: %v", workerID, err)
-	// 				}
-	// 			} else {
-	// 				if err := job.msg.Nak(); err != nil {
-	// 					log.Printf("worker %d nak error: %v", workerID, err)
-	// 				}
-	// 			}
-	// 		}
-	// 	}(i)
-	// }
+func (n *NatsPubSub) Subscribe(ctx context.Context, streamName, consumerName string, callBack func(msg []byte) bool) error {
+	n.lock.Lock()
+	defer n.lock.Unlock()
 
-	sub, err := n.js.Subscribe(subjectName, func(m *nats.Msg) {
-		// workCh <- msgJob{msg: m}
-		if callBack(m.Data) {
-			if err := m.Ack(); err != nil {
+	consumer, err := n.js.Consumer(ctx, streamName, consumerName)
+	if err != nil {
+		return err
+	}
+
+	consumerCont := n.consumerConsumption[consumerName]
+	if consumerCont != nil {
+		consumerCont.Stop()
+	}
+
+	consumerContext, err := consumer.Consume(func(msg jetstream.Msg) {
+		if callBack(msg.Data()) {
+			if err := msg.Ack(); err != nil {
 				log.Printf("ack error: %v", err)
 			}
 		} else {
-			if err := m.Nak(); err != nil {
+			if err := msg.Nak(); err != nil {
 				log.Printf("nak error: %v", err)
 			}
 		}
-	},
-		nats.Durable(consumerName),
-		nats.AckExplicit(),
-		nats.MaxAckPending(maxWorkers),
-		// nats.AckWait(2*time.Minute),
-	)
-	if err != nil {
-		return fmt.Errorf("subscribe: %w", err)
-	}
+	})
 
-	n.subs[consumerName] = sub
+	n.consumerConsumption[consumerName] = consumerContext
+
 	return nil
 }
 
 func (n *NatsPubSub) UnSubscribe(consumerName string) error {
-	n.mu.Lock()
-	defer n.mu.Unlock()
+	n.lock.Lock()
+	defer n.lock.Unlock()
 
-	sub, ok := n.subs[consumerName]
-	if !ok {
-		return fmt.Errorf("no subscription for consumer %s", consumerName)
+	consumerCont := n.consumerConsumption[consumerName]
+	if consumerCont != nil {
+		consumerCont.Stop()
 	}
 
-	if err := sub.Unsubscribe(); err != nil {
-		return fmt.Errorf("unsubscribe: %w", err)
-	}
-	delete(n.subs, consumerName)
+	delete(n.consumerConsumption, consumerName)
+
 	return nil
 }
 

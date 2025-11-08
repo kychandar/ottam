@@ -1,6 +1,11 @@
 package metrics
 
-import "github.com/prometheus/client_golang/prometheus"
+import (
+	"fmt"
+	"os"
+
+	"github.com/prometheus/client_golang/prometheus"
+)
 
 var LatencyHist = prometheus.NewHistogramVec(
 	prometheus.HistogramOpts{
@@ -12,9 +17,28 @@ var LatencyHist = prometheus.NewHistogramVec(
 			300, 500, 800, 1000, 2000, 3000, 4000, 5000, 10000, 20000, 30000,
 		},
 	},
-	[]string{"layer"},
+	[]string{"instance_id", "layer"},
 )
 
+var Hostname string
+
 func init() {
+	hostName, err := os.Hostname()
+	if err != nil {
+		panic(err)
+	}
+
+	fmt.Println("hostName", hostName)
+	Hostname = hostName
 	prometheus.MustRegister(LatencyHist)
+	prometheus.MustRegister(WsConnections)
+
 }
+
+var WsConnections = prometheus.NewGaugeVec(
+	prometheus.GaugeOpts{
+		Name: "ws_connections_current",
+		Help: "Number of currently active WebSocket connections",
+	},
+	[]string{"instance_id"},
+)

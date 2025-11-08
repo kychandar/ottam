@@ -12,7 +12,6 @@ import (
 	"github.com/kychandar/ottam/http"
 	"github.com/kychandar/ottam/services"
 	"github.com/kychandar/ottam/services/centralisedSubscriber"
-	valkey "github.com/kychandar/ottam/services/inMemCache/valKey"
 	pubSubProvider "github.com/kychandar/ottam/services/pubsub/nats"
 	websocketbridge "github.com/kychandar/ottam/services/websocketBridge"
 	wswritechannelmanager "github.com/kychandar/ottam/services/wsWriteChanManager"
@@ -42,11 +41,7 @@ func startServer(cfg *config.Config) {
 	logger, cleanup := SetupLogger()
 	defer cleanup()
 	ctx := slogctx.NewCtx(context.Background(), logger)
-	// TODO: fix below
-	dataStore, err := valkey.NewValkeySetCache(cfg)
-	if err != nil {
-		panic(err)
-	}
+
 	wswritechannelmanager := wswritechannelmanager.NewClientWriterManager()
 	hostName, err := os.Hostname()
 	if err != nil {
@@ -58,14 +53,22 @@ func startServer(cfg *config.Config) {
 	if err != nil {
 		panic(err)
 	}
-	centSubs := centralisedSubscriber.New(dataStore, common.NodeID("node1"), wswritechannelmanager, func() services.SerializableMessage {
+
+	// Create worker pool first so it can be shared with centralisedSubscriber
+	workerPool := http.NewWorkerPool(logger, wswritechannelmanager)
+
+	centSubs := centralisedSubscriber.New(common.NodeID(hostName), wswritechannelmanager, workerPool, func() services.SerializableMessage {
 		return ds.NewEmpty()
 	}, pubSubProvider)
+
 	err = centSubs.ProcessDownstreamMessages(ctx)
 	if err != nil {
 		panic(err)
 	}
 
-	server := http.New(centSubs, websocketbridge.NewWsBridgeFactory(), wswritechannelmanager, logger)
-	server.Start()
+	go centSubs.SubscriptionSyncer(ctx)
+
+	server := http.New(common.NodeID(hostName), centSubs, websocketbridge.NewWsBridgeFactory(), wswritechannelmanager, logger)
+	err = server.Start()
+	panic(err)
 }

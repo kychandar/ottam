@@ -7,7 +7,7 @@ const wsLatency = new Trend('ws_message_latency', true);
 
 export const options = {
   summaryTrendStats: ['min', 'avg', 'med', 'max', 'p(75)', 'p(90)', 'p(95)', 'p(99)'],
-  vus: 1000,       // number of virtual users
+  vus: 1,       // number of virtual users
   duration: '30s' // test duration
 };
 
@@ -53,7 +53,6 @@ export default function () {
     // });
 
     socket.on('binaryMessage', function (data) {
-      // console.log("msg recieved")
       try {
         // Convert binary to string
         const msgStr = String.fromCharCode.apply(null, new Uint8Array(data));
