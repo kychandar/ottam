@@ -1,63 +1,18 @@
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: ottam-central-prcessor
-  namespace: valkey
-  labels:
-    app: ottam-central-prcessor
-spec:
-  replicas: 0
-  selector:
-    matchLabels:
-      app: ottam-central-prcessor
-  template:
-    metadata:
-      labels:
-        app: ottam-central-prcessor
-    spec:
-      containers:
-        - name: ottam-central-prcessor
-          image: ghcr.io/kychandar/ottam:dev
-          imagePullPolicy: Always
-          env:
-            - name: MAX_WORKERS
-              value: "500"          
-          args: ["./app", "centprocessor", "--config=./cfg.yml"]
-          workingDir: /app
-          volumeMounts:
-            - name: config-volume
-              mountPath: /app/cfg.yml
-              subPath: cfg.yml
-          resources:
-            requests:
-              cpu: "100m"
-              memory: "128Mi"
-            limits:
-              cpu: "2"
-              memory: "2Gi"            
-      volumes:
-        - name: config-volume
-          configMap:
-            name: go-server-config
----
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: go-server-config
-  namespace: valkey
+  name: ottam-config
+  namespace: ottam
 data:
   cfg.yml: |
-    redisProtoCache:
-      addr:
-      - 100.130.101.125:30079
     pubSub:
-      url: 100.130.101.125:30001
+      url: nats:4222
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: ottam-http-server
-  namespace: valkey
+  namespace: ottam
   labels:
     app: ottam-http-server
 spec:
@@ -93,13 +48,13 @@ spec:
       volumes:
         - name: config-volume
           configMap:
-            name: go-server-config
+            name: ottam-config
 ---
 apiVersion: v1
 kind: Service
 metadata:
   name: ottam-http-server-headless
-  namespace: valkey
+  namespace: ottam
 spec:
   clusterIP: None
   selector:
@@ -112,7 +67,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: ottam-http-server
-  namespace: valkey
+  namespace: ottam
 spec:
   type: NodePort
   selector:
@@ -121,17 +76,3 @@ spec:
     - port: 8080
       targetPort: 8080
       nodePort: 30080
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: ottam-central-prcessor
-  namespace: valkey
-spec:
-  type: NodePort
-  selector:
-    app: ottam-central-prcessor
-  ports:
-    - port: 8081
-      targetPort: 8081
-      nodePort: 30081

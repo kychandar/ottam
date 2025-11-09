@@ -102,19 +102,13 @@ func (wp *workerPool) worker(id int) {
 			// Connection still active, proceed
 		}
 
-		// Look up the connection fresh - if it's been closed and removed, skip
-		conn, exist := wp.wsWriteChanManager.GetConnectionForClientID(job.wsConnID)
-		if !exist {
-			// Connection was closed and removed from manager, skip this message
-			continue
-		}
-
 		logger := slogctx.FromCtx(job.ctx).With("worker-id", id, "client-id", job.wsConnID, "msg-id", job.msgID)
 
 		logger.InfoContext(job.ctx, "worker processing message write", "ms", time.Since(job.publishedTime).String())
 		metrics.LatencyHist.WithLabelValues(metrics.Hostname, "ws_bridge_ws_msg_write_start").Observe(float64(time.Since(job.publishedTime).Milliseconds()))
 
-		err := conn.WritePreparedMessage(job.preparedMsg)
+		// Use the manager's WritePreparedMessage method which ensures thread-safe writes
+		err := wp.wsWriteChanManager.WritePreparedMessage(job.wsConnID, job.preparedMsg)
 		if err != nil {
 			logger.ErrorContext(job.ctx, "error writing to websocket", "error", err)
 			// Connection error - context will be cancelled by ServeHTTP defer

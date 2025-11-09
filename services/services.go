@@ -54,6 +54,7 @@ type WsWriteChanManager interface {
 	GetConnectionForClientID(clientID string) (*websocket.Conn, bool)
 	SetConnectionForClientID(clientID string, conn *websocket.Conn)
 	DeleteClientID(clientID string)
+	WritePreparedMessage(clientID string, pm *websocket.PreparedMessage) error
 }
 
 type WorkerPool interface {
