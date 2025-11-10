@@ -1,4 +1,4 @@
-package main
+package tests
 
 import (
 	"bufio"
@@ -17,13 +17,12 @@ import (
 )
 
 const url = "ws://ottam-http-server.ottam.svc:8080/ws"
-const natsURL = "localhost:30001"
 
 var (
 	msgBytes []byte
 )
 
-func Test2(t *testing.T) {
+func TestSub(t *testing.T) {
 	fmt.Println("Connecting to:", url)
 
 	noOfClients := 20000
@@ -70,12 +69,7 @@ func Test2(t *testing.T) {
 		panic(err)
 	}
 	defer file.Close()
-	// pubSub, err := pubSubProvider.NewNatsPubSub(natsURL)
-	// if err != nil {
-	// 	panic(err)
-	// }
-	// defer pubSub.Close()
-	// Writer goroutine
+
 	latencies := make([]float64, 0, maxSafeBufferRequired)
 
 	go func() {
@@ -92,29 +86,6 @@ func Test2(t *testing.T) {
 	for i := 0; i < noOfClients; i++ {
 		go wsConn(ctx, wg, latencyCh)
 	}
-
-	// Run for a while
-	// done := make(chan struct{})
-	// go func(done chan struct{}) {
-	// 	ticker1 := time.NewTicker(msgPublishedEvery)
-	// 	for {
-	// 		select {
-	// 		case <-done:
-	// 			fmt.Println("publisher stopped")
-	// 			return
-	// 		case <-ticker1.C:
-	// 			msg, _ := ds.New("t1", []byte("hi"))
-	// 			msgByte, err := msg.Serialize()
-	// 			if err != nil {
-	// 				panic(err)
-	// 			}
-	// 			err = pubSub.Publish(context.TODO(), common.ChannelSubjFormat(string(msg.GetChannelName())), msgByte)
-	// 			if err != nil {
-	// 				panic(err)
-	// 			}
-	// 		}
-	// 	}
-	// }(done)
 
 	ticker := time.NewTicker(testDuration)
 	select {

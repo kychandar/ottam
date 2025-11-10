@@ -17,8 +17,9 @@ import (
 )
 
 const (
-	maxWorkers   = 400
-	jobQueueSize = 10000
+	// Optimized for 4 CPU / 8GiB / 5k connections per pod
+	maxWorkers   = 1000  // 1 worker per 5 connections (5000/5)
+	jobQueueSize = 30000 // 6x workers, handles broadcast to all connections
 
 	// WebSocket timeout constants
 	writeWait      = 10 * time.Second
@@ -102,31 +103,41 @@ func (wp *workerPool) worker(id int) {
 			// Connection still active, proceed
 		}
 
-		logger := slogctx.FromCtx(job.ctx).With("worker-id", id, "client-id", job.wsConnID, "msg-id", job.msgID)
-
-		logger.InfoContext(job.ctx, "worker processing message write", "ms", time.Since(job.publishedTime).String())
+		// Record latency at start
 		metrics.LatencyHist.WithLabelValues(metrics.Hostname, "ws_bridge_ws_msg_write_start").Observe(float64(time.Since(job.publishedTime).Milliseconds()))
 
 		// Use the manager's WritePreparedMessage method which ensures thread-safe writes
 		err := wp.wsWriteChanManager.WritePreparedMessage(job.wsConnID, job.preparedMsg)
 		if err != nil {
+			// Only log errors - avoid logging every successful write
+			logger := slogctx.FromCtx(job.ctx).With("worker-id", id, "client-id", job.wsConnID, "msg-id", job.msgID)
 			logger.ErrorContext(job.ctx, "error writing to websocket", "error", err)
 			// Connection error - context will be cancelled by ServeHTTP defer
 		} else {
+			// Record latency at completion
 			metrics.LatencyHist.WithLabelValues(metrics.Hostname, "ws_bridge_ws_msg_write_done").Observe(float64(time.Since(job.publishedTime).Milliseconds()))
-			logger.InfoContext(job.ctx, "worker finished writing message to websocket", "ms", time.Since(job.publishedTime).String())
 		}
 	}
 }
 
-// SubmitJob submits a message write job to the worker pool
+// SubmitJob submits a message write job to the worker pool (non-blocking)
 func (wp *workerPool) SubmitMessageJob(ctx context.Context, conn *websocket.Conn, preparedMsg *websocket.PreparedMessage, publishedTime time.Time, msgID string, wsConnID string) {
-	wp.jobQueue <- messageJob{
+	job := messageJob{
 		preparedMsg:   preparedMsg,
 		publishedTime: publishedTime,
 		msgID:         msgID,
 		ctx:           ctx,
 		wsConnID:      wsConnID,
+	}
+
+	// Non-blocking send to prevent fanout worker from blocking
+	select {
+	case wp.jobQueue <- job:
+		// Job successfully queued
+	default:
+		// Queue full - log and drop this message to prevent blocking
+		// In production, you might want to track this metric
+		wp.logger.Warn("worker queue full, dropping message", "ws-conn-id", wsConnID, "msg-id", msgID)
 	}
 }
 
@@ -145,6 +156,11 @@ var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool {
 		return true // allow all connections (for demo)
 	},
+	// Optimized buffer sizes for 5k connections on 8GiB RAM
+	ReadBufferSize:  4096, // 4KB per connection (down from 16KB default)
+	WriteBufferSize: 4096, // 4KB per connection (down from 16KB default)
+	// Total per connection: ~8KB buffers + ~16KB overhead = ~24KB
+	// 5000 connections × 24KB = ~120MB for WS buffers
 }
 
 func (pooler *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {

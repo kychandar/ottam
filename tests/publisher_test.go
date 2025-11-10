@@ -1,4 +1,4 @@
-package main
+package tests
 
 import (
 	"context"
@@ -10,8 +10,8 @@ import (
 	pubSubProvider "github.com/kychandar/ottam/services/pubsub/nats"
 )
 
-func Test3(t *testing.T) {
-	pubSub, err := pubSubProvider.NewNatsPubSub("localhost:30001")
+func TestPub(t *testing.T) {
+	pubSub, err := pubSubProvider.NewNatsPubSub("nats1:4222")
 	if err != nil {
 		panic(err)
 	}
