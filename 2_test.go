@@ -14,12 +14,9 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/kychandar/ottam/common"
-	"github.com/kychandar/ottam/ds"
-	pubSubProvider "github.com/kychandar/ottam/services/pubsub/nats"
 )
 
-const url = "ws://localhost:30080/ws"
+const url = "ws://ottam-http-server.ottam.svc:8080/ws"
 const natsURL = "localhost:30001"
 
 var (
@@ -29,8 +26,8 @@ var (
 func Test2(t *testing.T) {
 	fmt.Println("Connecting to:", url)
 
-	noOfClients := 1
-	testDuration := 10 * time.Second
+	noOfClients := 20000
+	testDuration := 30 * time.Second
 	msgPublishedEvery := 200 * time.Millisecond
 
 	maxPossibleMessages := int(testDuration/msgPublishedEvery) * noOfClients
@@ -73,11 +70,11 @@ func Test2(t *testing.T) {
 		panic(err)
 	}
 	defer file.Close()
-	pubSub, err := pubSubProvider.NewNatsPubSub(natsURL)
-	if err != nil {
-		panic(err)
-	}
-	defer pubSub.Close()
+	// pubSub, err := pubSubProvider.NewNatsPubSub(natsURL)
+	// if err != nil {
+	// 	panic(err)
+	// }
+	// defer pubSub.Close()
 	// Writer goroutine
 	latencies := make([]float64, 0, maxSafeBufferRequired)
 
@@ -97,28 +94,27 @@ func Test2(t *testing.T) {
 	}
 
 	// Run for a while
-	done := make(chan struct{})
-	go func(done chan struct{}) {
-		ticker1 := time.NewTicker(msgPublishedEvery)
-		for {
-			select {
-			case <-done:
-				fmt.Println("publisher stopped")
-				return
-			case <-ticker1.C:
-				msg, _ := ds.New("t1", []byte("hi"))
-				msgByte, err := msg.Serialize()
-				if err != nil {
-					panic(err)
-				}
-
-				err = pubSub.Publish(context.TODO(), common.ChannelSubjFormat(string(msg.GetChannelName())), msgByte)
-				if err != nil {
-					panic(err)
-				}
-			}
-		}
-	}(done)
+	// done := make(chan struct{})
+	// go func(done chan struct{}) {
+	// 	ticker1 := time.NewTicker(msgPublishedEvery)
+	// 	for {
+	// 		select {
+	// 		case <-done:
+	// 			fmt.Println("publisher stopped")
+	// 			return
+	// 		case <-ticker1.C:
+	// 			msg, _ := ds.New("t1", []byte("hi"))
+	// 			msgByte, err := msg.Serialize()
+	// 			if err != nil {
+	// 				panic(err)
+	// 			}
+	// 			err = pubSub.Publish(context.TODO(), common.ChannelSubjFormat(string(msg.GetChannelName())), msgByte)
+	// 			if err != nil {
+	// 				panic(err)
+	// 			}
+	// 		}
+	// 	}
+	// }(done)
 
 	ticker := time.NewTicker(testDuration)
 	select {
@@ -126,7 +122,7 @@ func Test2(t *testing.T) {
 		fmt.Printf("Stopping ")
 		cancel()
 	case <-ticker.C:
-		close(done)
+		// close(done)
 		fmt.Printf("Stopping after %s\n", testDuration.String())
 		cancel()
 	}
@@ -169,7 +165,7 @@ func wsConn(ctx context.Context, wg *sync.WaitGroup, writerChan chan<- float64) 
 		default:
 			_, msg, err := conn.ReadMessage()
 			if err != nil {
-				log.Println("read error:", err)
+				// log.Println("read error:", err)
 				return
 			}
 

@@ -218,7 +218,7 @@ data:
         metrics_path: /metrics
         dns_sd_configs:
           - names:
-              - 'ottam-http-server-headless.valkey.svc.cluster.local'
+              - 'ottam-http-server-headless.ottam.svc.cluster.local'
             type: 'A'      # fetch all A records (pod IPs)
             port: 8080
         relabel_configs:

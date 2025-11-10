@@ -9,7 +9,7 @@ config:
     fileStore:
       pvc:
         size: 10Gi
-        storageClassName: longhorn
+        storageClassName: local-path
   cluster:
     name: 125-nats-cluster
     enabled: false
@@ -30,9 +30,9 @@ container:
         memory: 1Gi
 # Enable Prometheus exporter 
 promExporter:
-  enabled: true
+  enabled: false
   podMonitor:
-    enabled: true
+    enabled: false
 # Expose NATS via NodePort
 service:
   merge:

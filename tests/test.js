@@ -7,7 +7,7 @@ const wsLatency = new Trend('ws_message_latency', true);
 
 export const options = {
   summaryTrendStats: ['min', 'avg', 'med', 'max', 'p(75)', 'p(90)', 'p(95)', 'p(99)'],
-  vus: 1,       // number of virtual users
+  vus: 1000,       // number of virtual users
   duration: '30s' // test duration
 };
 
@@ -69,9 +69,9 @@ export default function () {
           wsLatency.add(latencyMs);
 
           // Optional: log sample
-          if (Math.random() < 0.01) {
-            console.log(`Channel: ${msg.channel_name}, Latency: ${latencyMs}ms, MsgID: ${msg.msg_id}`);
-          }
+          // if (Math.random() < 0.01) {
+          //   console.log(`Channel: ${msg.channel_name}, Latency: ${latencyMs}ms, MsgID: ${msg.msg_id}`);
+          // }
         } else {
           console.error('Missing published_time in message');
         }

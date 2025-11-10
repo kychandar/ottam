@@ -1,0 +1,96 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: haproxy-config
+  namespace: ottam
+data:
+  haproxy.cfg: |
+    global
+        log stdout format raw local0
+        maxconn 1000000        # Max 1M concurrent connections
+        ulimit-n 2000120       # File descriptors (cannot exceed node limit)
+        tune.ssl.default-dh-param 2048
+        daemon
+
+    defaults
+        log     global
+        mode    tcp
+        option  dontlognull
+        option  tcp-smart-accept
+        option  tcp-smart-connect
+        retries 3
+        timeout connect 5s
+        timeout client 1h       # WebSocket connections are long-lived
+        timeout server 1h
+
+    resolvers kube-dns
+        nameserver dns1 10.43.0.10:53
+        resolve_retries 3
+        timeout retry 1s
+        hold valid 10s
+
+    frontend ws_frontend
+        bind *:8080
+        default_backend ws_backend
+
+    backend ws_backend
+        balance leastconn
+        option tcp-check
+        server-template srv 50 ottam-http-server-headless.ottam.svc.cluster.local:8080 check resolvers kube-dns resolve-prefer ipv4
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: haproxy
+  namespace: ottam
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: haproxy
+  template:
+    metadata:
+      labels:
+        app: haproxy
+    spec:
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      containers:
+      - name: haproxy
+        image: haproxy:2.8-alpine
+        resources:
+          requests:
+            cpu: "2"
+            memory: "2Gi"
+          limits:
+            cpu: "4"
+            memory: "4Gi"
+        env:
+          - name: MAXCONN
+            value: "1000000"
+        volumeMounts:
+          - name: haproxy-config
+            mountPath: /usr/local/etc/haproxy/haproxy.cfg
+            subPath: haproxy.cfg
+        securityContext:
+          capabilities:
+            add: ["SYS_RESOURCE"]
+      volumes:
+        - name: haproxy-config
+          configMap:
+            name: haproxy-config
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: haproxy
+  namespace: ottam
+spec:
+  selector:
+    app: haproxy
+  ports:
+    - port: 8080
+      targetPort: 8080
