@@ -34,7 +34,7 @@ Ottam is a production-ready WebSocket infrastructure layer designed to handle ma
 
 ## Performance Benchmarks
 
-Ottam has been rigorously stress-tested in a Kubernetes environment to validate production readiness.
+Ottam has been rigorously stress-tested in a Kubernetes environment to validate limits.
 
 ### Stress Test Results
 

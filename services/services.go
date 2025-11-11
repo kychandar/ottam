@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"net/http"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -59,4 +60,16 @@ type WsWriteChanManager interface {
 
 type WorkerPool interface {
 	SubmitMessageJob(ctx context.Context, conn *websocket.Conn, preparedMsg *websocket.PreparedMessage, publishedTime time.Time, msgID string, wsConnID string)
+}
+
+type MetricsRegistry interface {
+	GetHandler() http.Handler
+
+	IncWsConnectionCount()
+	DecWsConnectionCount()
+
+	ObserveCentSubscriberStartLat(msgPublishedTime time.Time)
+	ObserveCentSubscriberFinishLat(msgPublishedTime time.Time)
+	ObserveWsBridgeWriteStart(msgPublishedTime time.Time)
+	ObserveWsBridgeWriteEnd(msgPublishedTime time.Time)
 }

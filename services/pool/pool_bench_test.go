@@ -3,7 +3,7 @@ package pool
 import (
 	"testing"
 
-	"github.com/kychandar/ottam/ds"
+	"github.com/kychandar/ottam/common/ds"
 )
 
 // BenchmarkPoolVsAllocation compares pool vs direct allocation
@@ -47,19 +47,19 @@ func BenchmarkIntermittenMsgPool(b *testing.B) {
 // Benchmark 1000 concurrent clients sending messages (realistic fanout)
 func BenchmarkFanout1000Clients(b *testing.B) {
 	pool := NewObjectPool()
-	
+
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
 			// Simulate fanout to 1000 clients
 			intMsg := pool.IntermittenMsg.Get()
 			intMsg.Id = "msg-123"
-			
+
 			// Send to 1000 "clients" (simulate with loop)
 			for i := 0; i < 1000; i++ {
 				_ = *intMsg // Simulate copy to client channel
 			}
-			
+
 			pool.ResetIntermittenMsg(intMsg)
 		}
 	})
@@ -71,7 +71,7 @@ func BenchmarkPoolAllocations(b *testing.B) {
 
 	b.ReportAllocs()
 	b.ResetTimer()
-	
+
 	for i := 0; i < b.N; i++ {
 		msg := pool.ClientMessage.Get()
 		pool.ClientMessage.Put(msg)
@@ -81,7 +81,7 @@ func BenchmarkPoolAllocations(b *testing.B) {
 func BenchmarkDirectAllocationMemory(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
-	
+
 	for i := 0; i < b.N; i++ {
 		_ = &ds.ClientMessage{}
 	}
@@ -108,4 +108,3 @@ Real-world scenario:
 - Without pool: 500,000 allocations/sec = GC nightmare
 - With pool:    ~0 allocations/sec = smooth operation
 */
-

@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/kychandar/ottam/common"
-	"github.com/kychandar/ottam/ds"
+	"github.com/kychandar/ottam/common/ds"
 	pubSubProvider "github.com/kychandar/ottam/services/pubsub/nats"
 )
 

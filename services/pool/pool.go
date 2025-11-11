@@ -4,7 +4,7 @@ import (
 	"sync"
 
 	"github.com/kychandar/ottam/common"
-	"github.com/kychandar/ottam/ds"
+	"github.com/kychandar/ottam/common/ds"
 )
 
 // GenericPool is a generic sync.Pool wrapper
@@ -37,11 +37,11 @@ func (p *GenericPool[T]) Put(obj T) {
 
 // ObjectPool holds all the pools for frequently used objects
 type ObjectPool struct {
-	ClientMessage      *GenericPool[*ds.ClientMessage]
-	ControlPlaneMsg    *GenericPool[*ds.ControlPlaneMessage]
+	ClientMessage       *GenericPool[*ds.ClientMessage]
+	ControlPlaneMsg     *GenericPool[*ds.ControlPlaneMessage]
 	SubscriptionPayload *GenericPool[*ds.SubscriptionPayload]
-	IntermittenMsg     *GenericPool[*common.IntermittenMsg]
-	ByteSlice          *GenericPool[[]byte]
+	IntermittenMsg      *GenericPool[*common.IntermittenMsg]
+	ByteSlice           *GenericPool[[]byte]
 }
 
 // NewObjectPool creates and initializes all object pools
@@ -100,4 +100,3 @@ func (p *ObjectPool) ResetIntermittenMsg(msg *common.IntermittenMsg) {
 func (p *ObjectPool) ResetByteSlice(b []byte) {
 	p.ByteSlice.Put(b[:0]) // Reset slice to 0 length, keep capacity
 }
-

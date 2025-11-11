@@ -2,8 +2,6 @@ package centralisedSubscriber
 
 import (
 	"context"
-	"fmt"
-	"log/slog"
 	"sync"
 	"time"
 
@@ -11,7 +9,6 @@ import (
 	set "github.com/duke-git/lancet/v2/datastructure/set"
 	"github.com/gorilla/websocket"
 	"github.com/kychandar/ottam/common"
-	"github.com/kychandar/ottam/metrics"
 	"github.com/kychandar/ottam/services"
 	"github.com/kychandar/ottam/services/pool"
 	slogctx "github.com/veqryn/slog-context"
@@ -28,6 +25,7 @@ type centralisedSubscriber struct {
 	fanoutCh           chan *fanoutJob
 	stopFanout         chan struct{}
 	subscriptionSyncer chan struct{}
+	metricsRegistry    services.MetricsRegistry
 }
 
 type fanoutJob struct {
@@ -55,17 +53,22 @@ func New(
 }
 
 func (c *centralisedSubscriber) SubscriptionSyncer(ctx context.Context) {
-	fmt.Println("SubscriptionSyncer startee")
-
-	logger := slogctx.FromCtx(ctx).With("comoponent", "centralisedSubscriber")
+	logger := slogctx.FromCtx(ctx).With("component", "centralisedSubscriber")
 	logger.DebugContext(ctx, "starting subscription syncer")
 	actualSubsSet := set.New[common.ChannelName]()
+	var lastSyncTime time.Time
+	minSyncInterval := 50 * time.Millisecond
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-c.subscriptionSyncer:
-			fmt.Println("SubscriptionSyncer started")
+			elapsed := time.Since(lastSyncTime)
+			if elapsed < minSyncInterval {
+				sleep := minSyncInterval - elapsed
+				time.Sleep(sleep)
+			}
+
 			requiredSubsSet := set.New[common.ChannelName]()
 
 			for x := range c.channelsTracker.Keys() {
@@ -86,7 +89,7 @@ func (c *centralisedSubscriber) SubscriptionSyncer(ctx context.Context) {
 				logger.ErrorContext(ctx, "error in updating consumer", "err", err)
 				c.subscriptionSyncer <- struct{}{}
 			}
-			fmt.Println("SubscriptionSyncer completed", keys)
+			lastSyncTime = time.Now()
 		}
 	}
 }
@@ -94,13 +97,11 @@ func (c *centralisedSubscriber) SubscriptionSyncer(ctx context.Context) {
 func (c *centralisedSubscriber) ProcessDownstreamMessages(ctx context.Context) error {
 	logger := slogctx.FromCtx(ctx).With("comoponent", "centralisedSubscriber")
 	logger.InfoContext(ctx, "starting service")
-	fmt.Println("ProcessDownstreamMessages startee")
+
 	// Start fanout workers (async)
-	// Increased from 50 to 500 to handle high connection count efficiently
-	// Each worker handles ~10 connections, reducing contention
 	const numWorkers = 200
 	for i := 0; i < numWorkers; i++ {
-		go c.fanoutWorker(ctx, logger)
+		go c.fanoutWorker(ctx)
 	}
 
 	objPool := pool.GetGlobalPool()
@@ -122,7 +123,7 @@ func (c *centralisedSubscriber) ProcessDownstreamMessages(ctx context.Context) e
 			logger.ErrorContext(ctx, "failed to deserialize message", "err", err, "msg", string(msgBytes))
 			return true
 		}
-		metrics.LatencyHist.WithLabelValues(metrics.Hostname, "cent_subscriber_start").Observe(float64(time.Since(msg.GetPublishedTime()).Milliseconds()))
+		c.metricsRegistry.ObserveCentSubscriberStartLat(msg.GetPublishedTime())
 		pm, err := websocket.NewPreparedMessage(websocket.BinaryMessage, msgBytes)
 		if err != nil {
 			logger.ErrorContext(ctx, "failed to prepare ws message", "err", err, "msg", string(msgBytes))
@@ -137,7 +138,7 @@ func (c *centralisedSubscriber) ProcessDownstreamMessages(ctx context.Context) e
 
 		logger := logger.With("msg-id", msg.GetMsgID())
 
-		logger.Info("msg recieved after", "ms", time.Since(msg.GetPublishedTime()).String())
+		logger.Info("msg recieved after", "duration", time.Since(msg.GetPublishedTime()).String())
 
 		set, exist := c.channelsTracker.Get(msg.GetChannelName())
 		if !exist {
@@ -145,7 +146,7 @@ func (c *centralisedSubscriber) ProcessDownstreamMessages(ctx context.Context) e
 			return true
 		}
 
-		logger.Info("channels map fetched", "ms", time.Since(msg.GetPublishedTime()).String())
+		logger.Info("channels map fetched", "duration", time.Since(msg.GetPublishedTime()).String())
 
 		// Send to worker pool (non-blocking fanout)
 		select {
@@ -153,13 +154,12 @@ func (c *centralisedSubscriber) ProcessDownstreamMessages(ctx context.Context) e
 			intMsg: intMsg,
 			set:    set,
 		}:
-			logger.Info("msg sent to fanout queue after", "ms", time.Since(msg.GetPublishedTime()).String())
+			logger.Info("msg sent to fanout queue after", "duration", time.Since(msg.GetPublishedTime()).String())
 		case <-ctx.Done():
 			objPool.ResetIntermittenMsg(intMsg)
 			return false
 		}
-
-		metrics.LatencyHist.WithLabelValues(metrics.Hostname, "cent_subscriber_done").Observe(float64(time.Since(msg.GetPublishedTime()).Milliseconds()))
+		c.metricsRegistry.ObserveCentSubscriberFinishLat(msg.GetPublishedTime())
 		return true
 	}
 
@@ -171,7 +171,7 @@ func (c *centralisedSubscriber) ProcessDownstreamMessages(ctx context.Context) e
 }
 
 // fanoutWorker processes messages and distributes them to subscribed clients
-func (c *centralisedSubscriber) fanoutWorker(ctx context.Context, logger *slog.Logger) {
+func (c *centralisedSubscriber) fanoutWorker(ctx context.Context) {
 	objPool := pool.GetGlobalPool()
 	for {
 		select {
@@ -207,23 +207,18 @@ func (c *centralisedSubscriber) fanoutWorker(ctx context.Context, logger *slog.L
 
 // Subscribe adds a client to a channel
 func (s *centralisedSubscriber) Subscribe(ctx context.Context, clientID string, channelName common.ChannelName) error {
-	fmt.Println("subscribe called for ", clientID, channelName)
 	s.lock.RLock()
 	subMap, exist := s.channelsTracker.Get(channelName)
 	s.lock.RUnlock()
 	if !exist {
-		fmt.Println("channel does not exist")
 		s.lock.Lock()
 		subMap, exist = s.channelsTracker.Get(channelName)
 		if !exist {
 			subMap = haxmap.New[string, struct{}]()
 			s.channelsTracker.Set(channelName, subMap)
-			fmt.Println("added channel to sync map", s.channelsTracker.Len())
 			select {
 			case s.subscriptionSyncer <- struct{}{}:
-				fmt.Println("triggerd syncer")
 			default:
-				fmt.Println("not triggerd syncer")
 			}
 		}
 		s.lock.Unlock()

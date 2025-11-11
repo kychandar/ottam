@@ -4,10 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 
 	"github.com/gorilla/websocket"
-	"github.com/kychandar/ottam/ds"
+	"github.com/kychandar/ottam/common/ds"
 	"github.com/kychandar/ottam/services"
 	"github.com/kychandar/ottam/services/pool"
 )
@@ -32,7 +32,7 @@ type websocketBridge struct {
 
 // ProcessMessagesFromServer is no longer needed - messages go directly to worker pool from fanout workers
 func (w *websocketBridge) ProcessMessagesFromServer(ctx context.Context) {
-	// No-op: This method is kept to satisfy the interface but does nothing
+	// No-op: This method is kept to satisfy the interface but does nothing [as a placeholder for future refactor]
 	// Messages are now sent directly from fanout workers to the worker pool
 	<-ctx.Done()
 }
@@ -46,28 +46,24 @@ func (w *websocketBridge) ProcessMessagesFromClient(ctx context.Context) {
 		_, message, err := w.conn.ReadMessage()
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-				log.Printf("unexpected close error: %v", err)
-			} else {
-				log.Printf("read error: %v", err)
+				slog.Error("nak error", "err", err)
 			}
 			break
 		}
-		fmt.Println("read message from client")
+
 		// Get ClientMessage from pool instead of allocating new
 		clientMessage := objPool.ClientMessage.Get()
 		err = json.Unmarshal(message, clientMessage)
 		if err != nil {
-			// TODO handle error
+			// TODO handle error by returning response
 			objPool.ResetClientMessage(clientMessage)
-			fmt.Println("error in decoding client message", err)
 			continue
 		}
 
 		payload, err := json.Marshal(clientMessage.Payload)
 		if err != nil {
-			// TODO handle error
+			// TODO handle error by returning response
 			objPool.ResetClientMessage(clientMessage)
-			fmt.Println("error in decoding payload", err)
 			continue
 		}
 
@@ -76,7 +72,7 @@ func (w *websocketBridge) ProcessMessagesFromClient(ctx context.Context) {
 			contrlPlaneMsg := objPool.ControlPlaneMsg.Get()
 			err = json.Unmarshal(payload, contrlPlaneMsg)
 			if err != nil {
-				// TODO handle error
+				// TODO handle error by returning response
 				objPool.ResetClientMessage(clientMessage)
 				objPool.ResetControlPlaneMessage(contrlPlaneMsg)
 				continue
@@ -84,16 +80,15 @@ func (w *websocketBridge) ProcessMessagesFromClient(ctx context.Context) {
 
 			payload, err := json.Marshal(contrlPlaneMsg.Payload)
 			if err != nil {
-				// TODO handle error
+				// TODO handle error by returning response
 				objPool.ResetClientMessage(clientMessage)
 				objPool.ResetControlPlaneMessage(contrlPlaneMsg)
-				fmt.Println("error in decoding control plane payload", err)
 				continue
 			}
 
 			err = w.HandleControlOp(contrlPlaneMsg.ControlPlaneOp, payload)
 			if err != nil {
-				// TODO handle error
+				// TODO handle error by returning response
 				objPool.ResetClientMessage(clientMessage)
 				objPool.ResetControlPlaneMessage(contrlPlaneMsg)
 				continue

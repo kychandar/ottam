@@ -15,16 +15,16 @@ func main() {
 }
 
 func init() {
-	// Start a simple HTTP server in a goroutine
+	// Enable block profiling for performance analysis
 	runtime.SetBlockProfileRate(1)
-	go func() {
-		port := 8081
-		fmt.Printf("Starting server on :%d\n", port)
-		if err := http.ListenAndServe(fmt.Sprintf(":%d", port), nil); err != nil {
-			fmt.Printf("HTTP server error: %v\n", err)
-		}
-	}()
-
+	
+	// Register metrics handler globally
+	// This will be available on the health check port (default 8081)
+	// along with /health/ready and /health/live endpoints
 	http.Handle("/metrics", promhttp.Handler())
-
+	
+	fmt.Println("Ottam Real-time Backend Server")
+	fmt.Println("===============================")
+	fmt.Println("Metrics will be available at: /metrics")
+	fmt.Println("Profiling available at: /debug/pprof/")
 }

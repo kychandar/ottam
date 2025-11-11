@@ -2,13 +2,15 @@ package pubSubProvider
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
-	"strconv"
 	"sync"
 	"time"
 
+	"github.com/kychandar/ottam/config"
 	"github.com/kychandar/ottam/services"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
@@ -39,6 +41,68 @@ func NewNatsPubSub(natsURL string) (services.PubSubProvider, error) {
 	}, nil
 }
 
+// NewNatsPubSubWithTLS creates a new NATS PubSub provider with TLS support
+func NewNatsPubSubWithTLS(natsURL string, tlsConfig config.TLSConfig) (services.PubSubProvider, error) {
+	var opts []nats.Option
+
+	if tlsConfig.Enabled {
+		// Load TLS configuration
+		tlsConf, err := loadTLSConfig(tlsConfig)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load TLS config: %w", err)
+		}
+		opts = append(opts, nats.Secure(tlsConf))
+	}
+
+	nc, err := nats.Connect(natsURL, opts...)
+	if err != nil {
+		return nil, fmt.Errorf("nats connect: %w", err)
+	}
+
+	js, err := jetstream.New(nc)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create JetStream context: %w", err)
+	}
+
+	return &NatsPubSub{
+		nc:                  nc,
+		js:                  js,
+		consumerConsumption: make(map[string]jetstream.ConsumeContext),
+	}, nil
+}
+
+// loadTLSConfig loads TLS certificates and creates a tls.Config
+func loadTLSConfig(tlsConfig config.TLSConfig) (*tls.Config, error) {
+	tlsConf := &tls.Config{
+		MinVersion: tls.VersionTLS12,
+	}
+
+	// Load client certificates if provided
+	if tlsConfig.CertFile != "" && tlsConfig.KeyFile != "" {
+		cert, err := tls.LoadX509KeyPair(tlsConfig.CertFile, tlsConfig.KeyFile)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load client cert/key: %w", err)
+		}
+		tlsConf.Certificates = []tls.Certificate{cert}
+	}
+
+	// Load CA certificate if provided
+	if tlsConfig.CAFile != "" {
+		caCert, err := os.ReadFile(tlsConfig.CAFile)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read CA file: %w", err)
+		}
+
+		caCertPool := x509.NewCertPool()
+		if !caCertPool.AppendCertsFromPEM(caCert) {
+			return nil, fmt.Errorf("failed to parse CA certificate")
+		}
+		tlsConf.RootCAs = caCertPool
+	}
+
+	return tlsConf, nil
+}
+
 func (n *NatsPubSub) CreateOrUpdateStream(ctx context.Context, streamName string, subjects []string) error {
 	n.lock.Lock()
 	defer n.lock.Unlock()
@@ -64,20 +128,9 @@ func (n *NatsPubSub) CreateOrUpdateConsumer(ctx context.Context, streamName, con
 	n.lock.Lock()
 	defer n.lock.Unlock()
 
-	maxWorkers := 100
-	maxWorkersString, exist := os.LookupEnv("MAX_WORKERS")
-	if exist {
-		parsed, err := strconv.Atoi(maxWorkersString)
-		if err != nil {
-			fmt.Printf("invalid MAX_WORKERS=%q, using default %d\n", maxWorkersString, maxWorkers)
-		} else {
-			maxWorkers = parsed
-		}
-	}
-
 	_, err := n.js.CreateOrUpdateConsumer(ctx, streamName, jetstream.ConsumerConfig{
 		Name:           consumerName,
-		MaxAckPending:  maxWorkers,
+		MaxAckPending:  100,
 		FilterSubjects: subjects,
 		DeliverPolicy:  jetstream.DeliverNewPolicy,
 	})
@@ -102,11 +155,11 @@ func (n *NatsPubSub) Subscribe(ctx context.Context, streamName, consumerName str
 	consumerContext, err := consumer.Consume(func(msg jetstream.Msg) {
 		if callBack(msg.Data()) {
 			if err := msg.Ack(); err != nil {
-				log.Printf("ack error: %v", err)
+				slog.Error("ack error", "err", err)
 			}
 		} else {
 			if err := msg.Nak(); err != nil {
-				log.Printf("nak error: %v", err)
+				slog.Error("nak error", "err", err)
 			}
 		}
 	})

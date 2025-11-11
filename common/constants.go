@@ -6,9 +6,6 @@ type CachePrefix int
 
 const (
 	channelSubscription CachePrefix = iota // 0
-	// Autumn                                 // 1
-	// Winter                                 // 2
-	// Spring                                 // 3
 )
 
 const cacheKeyFormat = "%d-%s"

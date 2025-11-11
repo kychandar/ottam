@@ -2,16 +2,17 @@ package http
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"log"
 	"log/slog"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
-	"github.com/kychandar/ottam/common"
-	"github.com/kychandar/ottam/metrics"
+	"github.com/kychandar/ottam/config"
 	"github.com/kychandar/ottam/services"
 	slogctx "github.com/veqryn/slog-context"
 )
@@ -40,14 +41,19 @@ type workerPool struct {
 	jobQueue           chan messageJob
 	logger             *slog.Logger
 	wsWriteChanManager services.WsWriteChanManager
+	metricsRegistry    services.MetricsRegistry
 }
 
 // NewWorkerPool creates and starts a new worker pool
-func NewWorkerPool(logger *slog.Logger, wsWriteChanManager services.WsWriteChanManager) services.WorkerPool {
+func NewWorkerPool(logger *slog.Logger,
+	wsWriteChanManager services.WsWriteChanManager,
+	metricsRegistry services.MetricsRegistry,
+) services.WorkerPool {
 	pool := &workerPool{
 		jobQueue:           make(chan messageJob, jobQueueSize),
 		logger:             logger,
 		wsWriteChanManager: wsWriteChanManager,
+		metricsRegistry:    metricsRegistry,
 	}
 	pool.start()
 	return pool
@@ -59,26 +65,33 @@ type server struct {
 	wsBridgeFactory    func(centSubscriber services.CentralisedSubscriber, wsConnID string, conn *websocket.Conn) services.WebSocketBridge
 	logger             *slog.Logger
 	workerPool         services.WorkerPool
-	nodeID             common.NodeID
+	metricsRegistry    services.MetricsRegistry
+	httpServer         *http.Server
+	config             *config.Config
+	healthChecker      *HealthChecker
+	shutdownWg         sync.WaitGroup
 }
 
 func New(
-	nodeID common.NodeID,
 	centSubscriber services.CentralisedSubscriber,
 	wsBridgeFactory func(centSubscriber services.CentralisedSubscriber, wsConnID string, conn *websocket.Conn) services.WebSocketBridge,
 	wsWriteChanManager services.WsWriteChanManager,
-	logger *slog.Logger) *server {
+	metricsRegistry services.MetricsRegistry,
+	logger *slog.Logger,
+	cfg *config.Config) *server {
 
 	server := &server{
 		centSubscriber:     centSubscriber,
 		wsBridgeFactory:    wsBridgeFactory,
 		wsWriteChanManager: wsWriteChanManager,
 		logger:             logger,
-		nodeID:             nodeID,
+		metricsRegistry:    metricsRegistry,
+		config:             cfg,
+		healthChecker:      NewHealthChecker(logger, "1.0.0"),
 	}
 
 	// Initialize the worker pool
-	server.workerPool = NewWorkerPool(logger, wsWriteChanManager)
+	server.workerPool = NewWorkerPool(logger, wsWriteChanManager, metricsRegistry)
 
 	return server
 }
@@ -104,7 +117,7 @@ func (wp *workerPool) worker(id int) {
 		}
 
 		// Record latency at start
-		metrics.LatencyHist.WithLabelValues(metrics.Hostname, "ws_bridge_ws_msg_write_start").Observe(float64(time.Since(job.publishedTime).Milliseconds()))
+		wp.metricsRegistry.ObserveWsBridgeWriteStart(job.publishedTime)
 
 		// Use the manager's WritePreparedMessage method which ensures thread-safe writes
 		err := wp.wsWriteChanManager.WritePreparedMessage(job.wsConnID, job.preparedMsg)
@@ -115,7 +128,7 @@ func (wp *workerPool) worker(id int) {
 			// Connection error - context will be cancelled by ServeHTTP defer
 		} else {
 			// Record latency at completion
-			metrics.LatencyHist.WithLabelValues(metrics.Hostname, "ws_bridge_ws_msg_write_done").Observe(float64(time.Since(job.publishedTime).Milliseconds()))
+			wp.metricsRegistry.ObserveWsBridgeWriteEnd(job.publishedTime)
 		}
 	}
 }
@@ -141,15 +154,122 @@ func (wp *workerPool) SubmitMessageJob(ctx context.Context, conn *websocket.Conn
 	}
 }
 
-func (server *server) Start() error {
-	http.HandleFunc("/ws", server.ServeHTTP)
+func (server *server) Start(ctx context.Context) error {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ws", server.ServeHTTP)
 
-	fmt.Println("server started at http://:8080")
-	err := http.ListenAndServe(":8080", nil)
-	if err != nil {
-		return err
+	addr := fmt.Sprintf("%s:%d", server.config.Server.Host, server.config.Server.Port)
+	
+	server.httpServer = &http.Server{
+		Addr:              addr,
+		Handler:           mux,
+		ReadHeaderTimeout: 10 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
+
+	// Configure TLS if enabled
+	if server.config.Server.TLS.Enabled {
+		tlsConfig, err := server.loadTLSConfig()
+		if err != nil {
+			return fmt.Errorf("failed to load TLS config: %w", err)
+		}
+		server.httpServer.TLSConfig = tlsConfig
+		server.logger.Info("TLS enabled for HTTP server")
+	}
+
+	// Mark service as ready
+	server.healthChecker.SetReady(true)
+
+	server.shutdownWg.Add(1)
+	go func() {
+		defer server.shutdownWg.Done()
+		<-ctx.Done()
+		server.logger.Info("Shutting down HTTP server...")
+		server.healthChecker.SetReady(false)
+		
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Duration(server.config.Server.ShutdownTimeout)*time.Second)
+		defer cancel()
+		
+		if err := server.httpServer.Shutdown(shutdownCtx); err != nil {
+			server.logger.Error("HTTP server shutdown error", "error", err)
+		}
+	}()
+
+	server.logger.Info("Starting HTTP server", "address", addr, "tls", server.config.Server.TLS.Enabled)
+
+	var err error
+	if server.config.Server.TLS.Enabled {
+		err = server.httpServer.ListenAndServeTLS(
+			server.config.Server.TLS.CertFile,
+			server.config.Server.TLS.KeyFile,
+		)
+	} else {
+		err = server.httpServer.ListenAndServe()
+	}
+
+	if err != nil && err != http.ErrServerClosed {
+		return fmt.Errorf("HTTP server error: %w", err)
+	}
+
 	return nil
+}
+
+// loadTLSConfig loads TLS configuration for the HTTP server
+func (server *server) loadTLSConfig() (*tls.Config, error) {
+	return &tls.Config{
+		MinVersion: tls.VersionTLS12,
+		CurvePreferences: []tls.CurveID{
+			tls.CurveP256,
+			tls.X25519,
+		},
+		PreferServerCipherSuites: true,
+		CipherSuites: []uint16{
+			tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+			tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+			tls.TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305,
+			tls.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305,
+			tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+			tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+		},
+	}, nil
+}
+
+// Shutdown gracefully shuts down the server
+func (server *server) Shutdown(ctx context.Context) error {
+	server.logger.Info("Initiating graceful shutdown...")
+	server.healthChecker.SetReady(false)
+	
+	shutdownCtx, cancel := context.WithTimeout(ctx, time.Duration(server.config.Server.ShutdownTimeout)*time.Second)
+	defer cancel()
+
+	if server.httpServer != nil {
+		if err := server.httpServer.Shutdown(shutdownCtx); err != nil {
+			server.logger.Error("Error shutting down HTTP server", "error", err)
+			return err
+		}
+	}
+
+	// Wait for all goroutines to finish
+	done := make(chan struct{})
+	go func() {
+		server.shutdownWg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		server.logger.Info("Graceful shutdown completed")
+		return nil
+	case <-shutdownCtx.Done():
+		server.logger.Warn("Shutdown timeout exceeded, forcing shutdown")
+		return shutdownCtx.Err()
+	}
+}
+
+// GetHealthChecker returns the health checker instance
+func (server *server) GetHealthChecker() *HealthChecker {
+	return server.healthChecker
 }
 
 var upgrader = websocket.Upgrader{
@@ -163,26 +283,25 @@ var upgrader = websocket.Upgrader{
 	// 5000 connections × 24KB = ~120MB for WS buffers
 }
 
-func (pooler *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+func (server *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Println("Upgrade error:", err)
 		return
 	}
 
-	metrics.WsConnections.WithLabelValues(string(pooler.nodeID)).Inc()
-
+	server.metricsRegistry.IncWsConnectionCount()
 	wsConnID := uuid.New().String()
 
-	pooler.wsWriteChanManager.SetConnectionForClientID(wsConnID, conn)
+	server.wsWriteChanManager.SetConnectionForClientID(wsConnID, conn)
 	ctx, cancel := context.WithCancel(r.Context())
-	ctx = slogctx.NewCtx(ctx, pooler.logger)
+	ctx = slogctx.NewCtx(ctx, server.logger)
 	defer func() {
 		cancel()
-		pooler.centSubscriber.UnsubscribeAll(context.TODO(), wsConnID)
-		pooler.wsWriteChanManager.DeleteClientID(wsConnID)
+		server.centSubscriber.UnsubscribeAll(context.TODO(), wsConnID)
+		server.wsWriteChanManager.DeleteClientID(wsConnID)
 		conn.Close()
-		metrics.WsConnections.WithLabelValues(string(pooler.nodeID)).Dec()
+		server.metricsRegistry.DecWsConnectionCount()
 	}()
 
 	// Configure WebSocket connection timeouts
@@ -191,7 +310,7 @@ func (pooler *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// 	conn.SetReadDeadline(time.Now().Add(pongWait))
 	// 	return nil
 	// })
-	bridge := pooler.wsBridgeFactory(pooler.centSubscriber, wsConnID, conn)
+	bridge := server.wsBridgeFactory(server.centSubscriber, wsConnID, conn)
 
 	// Start ping ticker in a goroutine
 	ticker := time.NewTicker(pingPeriod)
